@@ -1,0 +1,217 @@
+# ============================================================================
+# illegal-scanner - Simplified Chinese Messages
+# ============================================================================
+
+# ---- Plugin lifecycle ----
+plugin:
+  banner: "============================================"
+  enabled: "illegal-scanner 已启用！"
+  disabled: "illegal-scanner 已禁用。"
+  config_loaded: "配置已加载。"
+  config_failed: "配置加载失败！"
+  db_initialized: "数据库已初始化。"
+  db_failed: "数据库初始化失败！"
+  validation_initialized: "校验引擎已初始化，共 {count} 个校验器。"
+  validation_failed: "校验引擎初始化失败！"
+  events_registered: "事件监听器已注册。"
+  commands_registered: "命令已注册。"
+  full_scan_scheduled: "全量扫描已安排，将在 {seconds} 秒后启动。"
+
+# ---- Scan ----
+scan:
+  starting_full: "启动全量扫描{target}..."
+  starting_full_all: "启动全量扫描（所有世界）..."
+  already_running: "全量扫描已在运行中。"
+  phase1_online: "阶段 1：扫描在线玩家..."
+  phase1_done: "在线玩家扫描完成，标记 {count} 个物品。"
+  phase2_loaded: "阶段 2：扫描已加载区块..."
+  phase2_done: "世界 {world}：已加载区块中标记 {count} 个物品。"
+  phase3_offline: "阶段 3：扫描离线玩家..."
+  phase3_done: "离线玩家扫描完成，标记 {count} 个物品。"
+  phase4_unloaded: "阶段 4：加入未加载区块扫描队列..."
+  phase4_queued: "未加载区块扫描队列已填充，约 {count} 个区块。"
+  scan_complete: "============================================"
+  scan_complete_line: "全量扫描完成！"
+  scan_stats: "已扫描区块: {chunks}，标记物品: {flagged}"
+  scan_complete_footer: "============================================"
+  scan_found_warning: "发现 {count} 个非法/可疑物品。使用 /is report 查看。"
+  cancelled: "所有扫描已取消。"
+  player_scanning: "正在扫描玩家 {player}..."
+  player_done: "扫描完成。标记 {count} 个物品。"
+  chunk_scanning: "正在扫描当前区块..."
+  chunk_done: "扫描完成。标记 {count} 个物品。"
+  db_exported: "已导出 {count} 条记录到 plugins/illegal-scanner/export.json"
+
+# ---- Report ----
+report:
+  header: "===== illegal-scanner 报告 ====="
+  active_items: "活跃记录: §c{illegal} ILLEGAL §e{suspicious} SUSPICIOUS (§f{total} 总计§7)"
+  no_items: "§a数据库中没有活跃的非法物品记录。"
+  list_header: "===== 活跃物品 (第 {page} 页) ====="
+  list_footer: "第 {page}/{total_pages} 页  §e/is report list {next_page}"
+  list_hint: "§e/is report list [页数]§7 — 浏览所有物品"
+  detail_hint: "§e/is report detail <id>§7 — 查看完整详情"
+  player_hint: "§e/is report player <名称>§7 — 按玩家查看"
+  detail_header: "===== 物品 #{id} 详情 ====="
+  detail_not_found: "§c未找到物品 #{id}。"
+  detail_type: "§7类型: §f{type} §7x§f{count}"
+  detail_severity: "§7严重级别: {severity}"
+  detail_detected: "§7首次检测: §f{first}"
+  detail_last_seen: "§7最后发现: §f{last} (§f{times} 次§7)"
+  detail_location: "§7位置类型: §f{location_type}"
+  detail_world: "§7世界: §f{world}"
+  detail_player: "§7玩家: §f{player} §8({uuid})"
+  detail_slot: "§7槽位: §f{slot}"
+  detail_position: "§7坐标: §f{x}, {y}, {z}"
+  detail_container: "§7容器: §f{container}"
+  detail_entity: "§7实体: §f{entity} §8({euuid})"
+  detail_violations: "§7违规项:"
+  detail_violation_item: "  §8- §7{line}"
+  detail_resolved: "§a已处理，处理人: {by}，时间: {at}"
+  player_header: "===== {player} 的物品 ({count}) ====="
+  player_none: "§a未找到玩家 {player} 的非法物品。"
+  player_total: "§7总计: §f{count} §7个活跃物品。"
+  player_format: "{severity}#{id} §f{type} §7槽位 {slot} §8[{time}]"
+
+# ---- Item Check ----
+item:
+  clean: "§a物品合法 — 未发现违规项。"
+  header: "{severity} ===== {severity_label}: {type} ====="
+  violation_line: "{color}  [{severity}] §7{type}: §f{message}"
+  total: "{color}共 {count} 项违规。"
+  hold_item: "§c请手持一个物品。"
+  not_found: "§c未找到玩家: {player}。"
+  info_header: "===== 物品信息: {type} ====="
+  info_amount: "§7数量: §f{amount}  §7最大耐久: §f{durability}"
+  info_enchants: "§7附魔: §f{enchants}"
+  info_components: "§7数据组件:"
+  info_component_line: "§8  - §7{key}: §f{value}"
+  info_attr_header: "§7属性修饰:"
+  info_attr_line: "§8  - §7{attr} = §f{value} §8(op:{op} slot:{slot})"
+
+# ---- Status ----
+status:
+  header: "===== 状态 ====="
+  db_counts: "§7数据库活跃: §c{illegal} ILLEGAL §e{suspicious} SUSPICIOUS"
+  scanner: "§7扫描器: {status}"
+  chunks: "§7已扫描区块: §f{chunks}"
+  flagged: "§7标记物品: §f{flagged}"
+  full_scan_running: "§e全量扫描进行中: §f{scanned}/{total} 区块已扫描, §c{flagged} 物品标记§e, §7{queued} 排队中"
+  background: "§e后台扫描: §f{queued} 个任务排队中"
+  idle: "§a扫描器空闲。"
+
+# ---- DB ----
+db:
+  exporting: "§7正在导出数据库..."
+  vacuumed: "§a数据库已压缩优化。"
+  usage: "§e用法: /is db <export|vacuum>"
+
+# ---- Reload ----
+reload:
+  done: "§a配置已重载。"
+
+# ---- Alerts (console) ----
+alert:
+  illegal_inventory: "[{event}] 非法物品: {type} ({count}项违规) - {context}"
+  illegal_player: "[{event}] 非法物品: {type} 来自玩家 {player} - {count}项违规"
+  illegal_block: "非法物品: {type} 在 {container} 位于 {location} - {count}项违规"
+  illegal_entity: "[{entity_type}] 非法物品: {type} 位于 {x},{y},{z} - {count}项违规"
+  illegal_player_inv: "非法物品: {type} 在 {player} 的{inventory_type}槽位 {slot} - {count}项违规"
+
+# ---- Help ----
+help:
+  header: "===== illegal-scanner v{version} ====="
+  scan_player: "§e/is scan player <名称>§7 — 扫描玩家背包"
+  scan_chunk: "§e/is scan chunk§7 — 扫描当前区块"
+  scan_full: "§e/is scan full [世界]§7 — 启动渐进全量扫描"
+  scan_cancel: "§e/is scan cancel§7 — 取消扫描"
+  report: "§e/is report§7 — 查看报告摘要"
+  report_list: "§e/is report list [页数]§7 — 浏览所有物品"
+  report_detail: "§e/is report detail <id>§7 — 物品完整详情"
+  report_player: "§e/is report player <名称>§7 — 按玩家查看"
+  item_check: "§e/is item check§7 — 校验手中物品"
+  item_info: "§e/is item info§7 — 显示物品数据组件"
+  status: "§e/is status§7 — 扫描与数据库状态"
+  reload: "§e/is reload§7 — 重载配置"
+  db_export: "§e/is db export§7 — 导出数据库"
+  db_vacuum: "§e/is db vacuum§7 — 压缩数据库"
+  whitelist_item_add: "§e/is whitelist item add [--name <名>] [--lore <描述>] [--enchants <k:v,...>] [--attrs <n:v:op,...>] [--container]§7 — 添加物品白名单"
+  whitelist_item_remove: "§e/is whitelist item remove <id>§7 — 移除物品白名单"
+  whitelist_item_list: "§e/is whitelist item list [页数]§7 — 物品白名单列表"
+  whitelist_region_add: "§e/is whitelist region add <插件> <区域名> [世界]§7 — 添加区域白名单"
+  whitelist_region_remove: "§e/is whitelist region remove <id>§7 — 移除区域白名单"
+  whitelist_region_list: "§e/is whitelist region list§7 — 区域白名单列表"
+  whitelist_player_add: "§e/is whitelist player add <玩家名>§7 — 添加玩家白名单"
+  whitelist_player_remove: "§e/is whitelist player remove <玩家名>§7 — 移除玩家白名单"
+  whitelist_player_reset: "§e/is whitelist player reset <玩家名>§7 — 重置玩家白名单"
+  whitelist_player_list: "§e/is whitelist player list§7 — 玩家白名单列表"
+
+# ---- Permission ----
+permission:
+  no_perm: "§c你没有使用此命令的权限。"
+  player_only: "§c此命令仅玩家可用。"
+
+# ---- Query ----
+query:
+  block_header: "===== 位置 {world} {x},{y},{z} 的物品 ({count}) ====="
+  chunk_header: "===== {world} 区块 ({cx}, {cz}) [{bx}~{ex}, {bz}~{ez}] 的物品 ({count}) ====="
+  location_none: "§a未找到该位置的非法物品记录。"
+  location_item: "{severity}#{id} §f{type} §7[{container}] §8[{time}]"
+
+# ---- Show Visualization ----
+show:
+  usage: "§e用法: /is show chunk [页数]"
+  chunk_scanning: "§7正在扫描当前区块..."
+  chunk_header: "===== {world} 区块 ({cx}, {cz}) [{bx}~{ex}, {bz}~{ez}] ({total} 项) 第 {page}/{total_pages} 页 ====="
+  chunk_item: "{severity}{id} §f{type} §7[{container}] §8[{time}]"
+  chunk_footer: "第 {page}/{total_pages} 页  §e/is show chunk {next_page}"
+  no_violations: "§a当前区块未发现违规方块。"
+
+# ---- Whitelist ----
+whitelist:
+  # Item
+  item_added: "§a已添加物品白名单 (#{id}): {material}"
+  item_removed: "§a已移除物品白名单 #{id}"
+  item_list_header: "===== 物品白名单 (第 {page} 页, 共 {total} 条) ====="
+  item_list_entry: "§f#{id} §7{material} §8{name} {enchants}"
+  item_list_empty: "§a物品白名单为空。"
+  item_not_found: "§c未找到白名单条目 #{id}。"
+  item_already_whitelisted: "§e该物品已在白名单中。"
+  # Region
+  region_added: "§a已添加区域白名单 (#{id}): {plugin}/{region}"
+  region_removed: "§a已移除区域白名单 #{id}"
+  region_list_header: "===== 区域白名单 ({count} 条) ====="
+  region_list_entry: "§f#{id} §7{plugin} §f{region} §8[世界:{world}]"
+  region_list_empty: "§a区域白名单为空。"
+  region_no_plugin: "§c未检测到兼容的区域保护插件 (WorldGuard / Residence)。"
+  # Player
+  player_added: "§a已将玩家加入白名单: {player}"
+  player_removed: "§a已从白名单移除玩家: {player}"
+  player_reset: "§a已重置玩家白名单: {player}"
+  player_list_header: "===== 玩家白名单 ({count} 人) ====="
+  player_list_entry: "§f{player} §8({uuid})"
+  player_list_empty: "§a玩家白名单为空。"
+  player_not_found: "§c未找到玩家: {player}。"
+  player_already_whitelisted: "§e该玩家已在白名单中。"
+  player_cannot_remove_hidden: "§c无法移除隐藏管理员。"
+  # General
+  usage: "§e用法: /is whitelist <item|region|player> ..."
+  item_usage: "§e用法: /is whitelist item <add|remove|list>"
+  region_usage: "§e用法: /is whitelist region <add|remove|list>"
+  player_usage: "§e用法: /is whitelist player <add|remove|reset|list>"
+
+# ---- View ----
+view:
+  opened: "§a已打开物品查看界面 (#{id})。"
+  not_found: "§c未找到记录 #{id}，或该记录已被处理。"
+  usage: "§e用法: /is view <id|chunk|player|res> ..."
+
+# ---- General ----
+general:
+  unknown_subcommand: "§e未知子命令: {cmd}。"
+  usage: "§e用法: /is <scan|report|item|query|view|give|db|reload|status|show|whitelist>"
+  specify_world: "§c请指定世界名。"
+  specify_player: "§c请指定玩家名。"
+  world_not_found: "§c未找到世界: {world}。"
+  specify_id: "§e用法: /is report detail <id>"
+  invalid_id: "§c无效ID: {id}。"

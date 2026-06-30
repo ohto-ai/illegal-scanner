@@ -1,0 +1,181 @@
+# ============================================================================
+# illegal-scanner Configuration
+# ============================================================================
+
+database:
+  file: "items.db"
+  backup_interval_hours: 24
+
+# ----------------------------------------------------------------------------
+# Scan Settings
+# ----------------------------------------------------------------------------
+scan:
+  # One-time full scan (manually started, runs once to establish baseline)
+  full_scan_enabled: false          # Default OFF — use /is scan full to start manually
+  full_scan_delay_ticks: 1200       # Delay after startup before restoring state (1 min)
+  full_scan_chunks_per_tick: 1      # Chunks per tick during full scan (keep low!)
+  full_scan_player_data: true       # Also scan offline player .dat files
+  full_scan_max_age_hours: 168      # Resume window: re-scan chunks older than this (1 week)
+  full_scan_restore_countdown_seconds: 30  # Auto-resume countdown when RUNNING at restart
+
+  # Periodic loaded-chunk scanner (safety net, runs after full scan complete)
+  periodic_scan_enabled: true
+  periodic_scan_interval_seconds: 300   # Scan all loaded chunks every N seconds (5 min)
+  periodic_scan_initial_delay_ticks: 1200  # Delay before first periodic scan (1 min)
+
+  # Event-driven scanning
+  event_scan_enabled: true
+  online_player_scan_on_join: true
+  chunk_load_scan_enabled: true
+  chunk_scan_cooldown_seconds: 30
+
+  # Container types to scan (set to false to exclude)
+  scan_chests: true
+  scan_furnaces: true
+  scan_hoppers: true
+  scan_dispensers: true
+  scan_droppers: true
+  scan_brewing_stands: true
+  scan_shulker_boxes: true
+  scan_item_frames: true
+  scan_armor_stands: true
+  scan_minecart_containers: true
+  scan_dropped_items: false         # Performance-heavy, off by default
+  scan_player_enderchests: true
+  scan_player_inventories: true
+
+# ----------------------------------------------------------------------------
+# Visualization Settings
+# ----------------------------------------------------------------------------
+visualization:
+  default_duration_seconds: 30
+  particle_refresh_ticks: 10
+  max_highlight_blocks: 100
+
+# ----------------------------------------------------------------------------
+# Validation Settings
+# ----------------------------------------------------------------------------
+validation:
+  # Enchantment checks
+  enforce_max_levels: true
+  enforce_conflicts: true
+  enforce_item_compatibility: true
+
+  # Data component checks
+  flag_unbreakable: true
+  flag_custom_model_data: true
+  flag_adventure_tags: true
+  flag_lore_presence: true          # Mark any lore as ILLEGAL (no survival source)
+  flag_item_name_presence: true     # Mark any item_name as ILLEGAL (no survival source)
+
+  # Attribute thresholds (for values that DO exist in vanilla prototype)
+  attribute_limits:
+    max_health: 20.0
+    attack_damage: 15.0
+    armor: 30.0
+    armor_toughness: 20.0
+    knockback_resistance: 1.0
+    movement_speed: 0.8
+    attack_speed: 4.0
+    luck: 1.0
+    scale: 1.5
+    step_height: 1.0
+
+  # Potion checks
+  potion_max_amplifier: 1           # Level II max for most effects
+  potion_max_duration_ticks: 9600   # 8 minutes
+
+  # Book checks
+  book_max_pages: 100
+
+  # Firework checks
+  firework_max_flight: 3
+  firework_max_explosions: 10
+
+  # Custom name checks
+  custom_name_max_length: 50        # Anvil limit
+  flag_non_italic_custom_name: true # Non-italic = command only
+
+# ----------------------------------------------------------------------------
+# Monitor Settings
+# ----------------------------------------------------------------------------
+monitor:
+  enabled: true
+  interval_seconds: 300
+  flush_seconds: 5
+  retention_days: 7
+
+# ----------------------------------------------------------------------------
+# Alert Settings
+# ----------------------------------------------------------------------------
+alerts:
+  console_log: true
+  console_log_severity: "ILLEGAL"    # ILLEGAL | SUSPICIOUS | ALL
+  admin_notify: false
+  admin_notify_permission: "illegalscanner.notify"
+
+# ----------------------------------------------------------------------------
+# Materials to completely ignore (creative-only / never flag)
+# ----------------------------------------------------------------------------
+ignore_materials:
+  - COMMAND_BLOCK
+  - COMMAND_BLOCK_MINECART
+  - STRUCTURE_BLOCK
+  - JIGSAW
+  - LIGHT
+  - BARRIER
+  - KNOWLEDGE_BOOK
+  - DEBUG_STICK
+  - STRUCTURE_VOID
+
+# ----------------------------------------------------------------------------
+# Suspicious content keywords for lore/name scanning
+# ----------------------------------------------------------------------------
+suspicious_keywords:
+  - "管理员专属"
+  - "神器"
+  - "GM"
+  - "admin"
+  - "op"
+  - "hack"
+  - "exploit"
+  - "超模"
+  - "无敌"
+  - "创造"
+
+# ----------------------------------------------------------------------------
+# Violation message templates (supports placeholders in {braces})
+# ----------------------------------------------------------------------------
+violation_messages:
+  ENCHANT_LEVEL_EXCEEDED: "Enchantment {enchant} level {found} exceeds max {max}"
+  ENCHANT_CONFLICT: "Conflicting enchantments: {enchant1} + {enchant2}"
+  ENCHANT_WRONG_ITEM: "Enchantment {enchant} cannot be applied to {item}"
+  ENCHANT_DUPLICATE: "Duplicate enchantment: {enchant}"
+  ATTR_NOT_IN_WHITELIST: "Attribute {attr} is not in vanilla whitelist for {item}"
+  ATTR_VALUE_MISMATCH: "Attribute {attr} value {found} != vanilla {expected} for {item}"
+  ATTR_INVALID_SLOT: "Attribute {attr} invalid for slot {slot} on {item}"
+  ATTR_EXTRA_MODIFIER: "Extra attribute modifier beyond vanilla count for {item}"
+  COMPONENT_UNBREAKABLE: "Unbreakable tag present (creative/command only)"
+  COMPONENT_ADVENTURE_TAG: "Adventure-mode {tag} tag on survival item"
+  COMPONENT_LORE_PRESENT: "Lore present (not obtainable in survival)"
+  COMPONENT_ITEM_NAME: "Item name override present (not obtainable in survival)"
+  COMPONENT_CUSTOM_MODEL_DATA: "Custom model data: {value}"
+  COMPONENT_HIDE_TOOLTIP: "Hidden tooltip flag present"
+  COMPONENT_MAX_STACK_SIZE: "Stack size {found} exceeds item max {max}"
+  COMPONENT_MAX_DAMAGE: "Max damage {found} != vanilla {expected}"
+  CUSTOM_NAME_TOO_LONG: "Custom name too long: {length} chars (max {max})"
+  CUSTOM_NAME_NON_ITALIC: "Custom name has non-italic formatting (command only)"
+  CUSTOM_NAME_JSON_INJECTION: "Custom name contains JSON injection pattern"
+  CUSTOM_NAME_CONTROL_CHARS: "Custom name contains invisible control characters"
+  POTION_AMPLIFIER: "Potion effect {effect} amplifier {found} exceeds max {max}"
+  POTION_DURATION: "Potion effect {effect} duration {found} exceeds max {max}"
+  POTION_CONFLICT: "Conflicting potion effects: {effect1} + {effect2}"
+  POTION_INVALID_COLOR: "Custom potion color without matching effects"
+  BOOK_PAGES_EXCEEDED: "Book has {found} pages (max {max})"
+  BOOK_INVALID_JSON: "Book page {page} contains invalid JSON"
+  BOOK_AUTHOR_TOO_LONG: "Book author name too long: {length} (max 16)"
+  FIREWORK_FLIGHT_EXCEEDED: "Firework flight duration {found} exceeds max {max}"
+  FIREWORK_EXPLOSIONS_EXCEEDED: "Firework has {found} explosions (max {max})"
+  CONTAINER_CONTENTS_PRESENT: "Item carries block entity data with items (creative/command only)"
+  CONTAINER_EMPTY: "Item has empty block entity data (not survivally obtainable)"
+  CONTAINER_LOOT_PRESENT: "Container has loot table data (not survivally obtainable)"
