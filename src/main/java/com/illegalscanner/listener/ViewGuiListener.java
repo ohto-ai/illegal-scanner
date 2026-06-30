@@ -18,6 +18,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.ItemStack;
 
@@ -53,7 +54,13 @@ public class ViewGuiListener implements Listener {
             return;
         }
 
-        // --- SCAN view: control buttons (slots 10, 16) — SCAN uses 27-slot GUI ---
+        // --- SCAN view: control buttons (slots 10, 14, 16) — SCAN uses 27-slot GUI ---
+        if (holder.type == ViewType.SCAN && rawSlot == 14) {
+            // Refresh button — reopen with latest data from DB
+            int sessionId = Integer.parseInt(holder.context);
+            vh.openScanView(player, sessionId, 1, holder.back);
+            return;
+        }
         if (holder.type == ViewType.SCAN && (rawSlot == 10 || rawSlot == 16)) {
             handleScanControl(player, holder, rawSlot);
             return;
@@ -106,6 +113,15 @@ public class ViewGuiListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onDrag(InventoryDragEvent event) {
         if (event.getInventory().getHolder() instanceof ViewGuiHolder) event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (!(event.getInventory().getHolder() instanceof ViewGuiHolder holder)) return;
+        if (holder.type != ViewType.SCAN) return;
+        if (!(event.getPlayer() instanceof Player player)) return;
+        // Stop auto-refresh when scan session detail view is closed
+        plugin.getCommandRouter().getViewHandler().stopAutoRefresh(player);
     }
 
     // ==================== Rescan ====================

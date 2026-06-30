@@ -789,6 +789,102 @@ public class DatabaseManager {
         return count;
     }
 
+    /** Summary of a chunk with violations (for world/full views). */
+    public record ChunkViolationSummary(
+            String world, int chunkX, int chunkZ, int recordCount, long latestScanTime
+    ) {}
+
+    /**
+     * Get distinct chunks that have non-CLEAN violation records in a specific world,
+     * ordered by latest scan time descending. Paginated at the DB level.
+     */
+    public List<ChunkViolationSummary> getDistinctViolationChunks(String worldName, int page, int pageSize) {
+        List<ChunkViolationSummary> list = new ArrayList<>();
+        String sql = """
+            SELECT world, chunk_x, chunk_z, COUNT(*) AS record_count, MAX(scan_time) AS latest_time
+            FROM scan_records
+            WHERE world = ?
+              AND container NOT IN ('inventory', 'armor', 'offhand', 'enderchest')
+              AND severity != 'CLEAN'
+            GROUP BY world, chunk_x, chunk_z
+            ORDER BY latest_time DESC
+            LIMIT ? OFFSET ?
+        """;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, worldName);
+            ps.setInt(2, pageSize);
+            ps.setInt(3, (page - 1) * pageSize);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(new ChunkViolationSummary(
+                        rs.getString("world"), rs.getInt("chunk_x"), rs.getInt("chunk_z"),
+                        rs.getInt("record_count"), rs.getLong("latest_time")));
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to get distinct violation chunks for world: " + worldName, e);
+        }
+        return list;
+    }
+
+    /** Count distinct chunks with non-CLEAN violations in a world. */
+    public int countDistinctViolationChunks(String worldName) {
+        String sql = """
+            SELECT COUNT(DISTINCT chunk_x || ',' || chunk_z)
+            FROM scan_records
+            WHERE world = ?
+              AND container NOT IN ('inventory', 'armor', 'offhand', 'enderchest')
+              AND severity != 'CLEAN'
+        """;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, worldName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        } catch (SQLException e) { return 0; }
+    }
+
+    /**
+     * Get distinct chunks with non-CLEAN violations across ALL worlds,
+     * ordered by latest scan time descending. Paginated at the DB level.
+     */
+    public List<ChunkViolationSummary> getDistinctViolationChunksAllWorlds(int page, int pageSize) {
+        List<ChunkViolationSummary> list = new ArrayList<>();
+        String sql = """
+            SELECT world, chunk_x, chunk_z, COUNT(*) AS record_count, MAX(scan_time) AS latest_time
+            FROM scan_records
+            WHERE container NOT IN ('inventory', 'armor', 'offhand', 'enderchest')
+              AND severity != 'CLEAN'
+            GROUP BY world, chunk_x, chunk_z
+            ORDER BY latest_time DESC
+            LIMIT ? OFFSET ?
+        """;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, pageSize);
+            ps.setInt(2, (page - 1) * pageSize);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(new ChunkViolationSummary(
+                        rs.getString("world"), rs.getInt("chunk_x"), rs.getInt("chunk_z"),
+                        rs.getInt("record_count"), rs.getLong("latest_time")));
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to get distinct violation chunks across all worlds", e);
+        }
+        return list;
+    }
+
+    /** Count distinct chunks with non-CLEAN violations across all worlds. */
+    public int countDistinctViolationChunksAllWorlds() {
+        String sql = """
+            SELECT COUNT(DISTINCT world || ',' || chunk_x || ',' || chunk_z)
+            FROM scan_records
+            WHERE container NOT IN ('inventory', 'armor', 'offhand', 'enderchest')
+              AND severity != 'CLEAN'
+        """;
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            return rs.next() ? rs.getInt(1) : 0;
+        } catch (SQLException e) { return 0; }
+    }
+
     /** Query records by player (union of scan + monitor). */
     public List<UnifiedRecord> getRecordsByPlayer(String playerUuid, int page, int pageSize) {
         List<UnifiedRecord> list = new ArrayList<>();

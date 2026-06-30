@@ -158,22 +158,44 @@ public final class McaChunkReader {
         };
     }
 
-    /** Convert chunk-local + absolute Y to world block coordinates. */
+    /**
+     * Convert a block entity's stored position to world block coordinates.
+     *
+     * <p>Three formats are possible depending on Minecraft version and chunk format:
+     * <ol>
+     *   <li><b>No {@code z} tag</b> — packed format (MC ≥ 1.18): {@code x} encodes
+     *       localX | (localZ &lt;&lt; 4) | (sectionIndex &lt;&lt; 8).</li>
+     *   <li><b>{@code z} tag present, x and z in 0–15</b> — legacy local format:
+     *       x,z are chunk-relative (0–15), must add cx*16 / cz*16.</li>
+     *   <li><b>{@code z} tag present, x or z outside 0–15</b> — absolute world
+     *       coordinates (modern Paper/Spigot saves BlockPos directly). Use as-is.</li>
+     * </ol>
+     */
     private static int[] unpackBlockEntityPos(CompoundTag be, int cx, int cz) {
         int worldX, worldY, worldZ;
-        if (be.getBoolean("keepPacked")) {
-            // x = (localX & 0xF) | ((localZ & 0xF) << 4) | (sectionIndex << 8)
+        int y = be.getInt("y");
+        if (!be.contains("z")) {
+            // Packed format: no z tag, x = localX | (localZ << 4) | (section << 8)
             int packed = be.getInt("x");
             int lx = packed & 0xF;
             int lz = (packed >> 4) & 0xF;
             worldX = cx * 16 + lx;
-            worldY = be.getInt("y");
+            worldY = y;
             worldZ = cz * 16 + lz;
         } else {
-            // Legacy: x, y, z are stored directly (x,z are local within chunk)
-            worldX = cx * 16 + be.getInt("x");
-            worldY = be.getInt("y");
-            worldZ = cz * 16 + be.getInt("z");
+            int x = be.getInt("x");
+            int z = be.getInt("z");
+            if (x >= 0 && x <= 15 && z >= 0 && z <= 15) {
+                // Legacy local format: x,z in 0–15, relative to chunk corner
+                worldX = cx * 16 + x;
+                worldY = y;
+                worldZ = cz * 16 + z;
+            } else {
+                // Absolute world coordinates (Paper/Spigot saves BlockPos directly)
+                worldX = x;
+                worldY = y;
+                worldZ = z;
+            }
         }
         return new int[]{worldX, worldY, worldZ};
     }

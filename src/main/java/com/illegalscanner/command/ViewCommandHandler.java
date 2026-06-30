@@ -6,10 +6,13 @@ import com.illegalscanner.database.DatabaseManager.*;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -28,6 +31,13 @@ public class ViewCommandHandler implements SubCommandHandler {
     static final SimpleDateFormat DATE_FMT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     static final int GUI_SIZE = 54;
     public static final int PAGE_SIZE = 45;
+
+    /** Auto-refresh state for scan session detail views. */
+    private record RefreshState(int sessionId, BukkitTask task) {}
+    private final Map<UUID, RefreshState> autoRefresh = new HashMap<>();
+
+    /** Interval in ticks for auto-refresh (3 seconds = 60 ticks). */
+    private static final long REFRESH_INTERVAL_TICKS = 60L;
 
     public ViewCommandHandler(IllegalScanner plugin) { this.plugin = plugin; }
 
@@ -302,36 +312,26 @@ public class ViewCommandHandler implements SubCommandHandler {
 
     public void openWorldView(Player p, String worldName, int page, ViewGuiHolder back) {
         var db = plugin.getDatabaseManager();
-        Map<String, Integer> chunkCounts = new LinkedHashMap<>();
-        Map<String, Long> chunkLatest = new LinkedHashMap<>();
-        for (var chunk : p.getWorld().getLoadedChunks()) {
-            int count = db.countViolationsByChunk(worldName, chunk.getX(), chunk.getZ());
-            if (count > 0) {
-                String key = chunk.getX() + "," + chunk.getZ();
-                chunkCounts.put(key, count);
-                var recs = db.getRecordsByChunk(worldName, chunk.getX(), chunk.getZ(), 1, 1);
-                if (!recs.isEmpty()) chunkLatest.put(key, recs.get(0).scanTime());
-            }
-        }
-        List<String> keys = new ArrayList<>(chunkCounts.keySet());
-        keys.sort((a, b) -> Long.compare(chunkLatest.getOrDefault(b, 0L), chunkLatest.getOrDefault(a, 0L)));
-        int total = keys.size();
+        // Query DB directly for all chunks with violations — not limited to loaded chunks.
+        // MCA direct read scans unloaded chunks, which would be invisible otherwise.
+        int total = db.countDistinctViolationChunks(worldName);
         int totalPages = Math.max(1, (total + PAGE_SIZE - 1) / PAGE_SIZE);
         if (page > totalPages) page = totalPages;
-        int start = (page - 1) * PAGE_SIZE, end = Math.min(start + PAGE_SIZE, total);
+        var summaries = db.getDistinctViolationChunks(worldName, page, PAGE_SIZE);
+
         String title = buildTitle("§8世界:" + worldName, page, totalPages);
         ViewGuiHolder holder = new ViewGuiHolder(ViewType.WORLD, worldName, page, totalPages, back);
         Inventory gui = Bukkit.createInventory(holder, GUI_SIZE, title);
         int slot = 0;
-        for (int i = start; i < end; i++) {
-            String[] xy = keys.get(i).split(",");
-            int cx = Integer.parseInt(xy[0]), cz = Integer.parseInt(xy[1]);
+        for (var s : summaries) {
+            int cx = s.chunkX(), cz = s.chunkZ();
             ItemStack display = new ItemStack(Material.MAP);
             ItemMeta meta = display.getItemMeta();
             if (meta != null) {
                 meta.setDisplayName("§e区块 (" + cx + "," + cz + ")");
-                meta.setLore(List.of("§7违规数: §c" + chunkCounts.get(keys.get(i)),
+                meta.setLore(List.of("§7违规数: §c" + s.recordCount(),
                         "§7坐标: §f" + (cx * 16) + "~" + (cx * 16 + 15) + ", " + (cz * 16) + "~" + (cz * 16 + 15),
+                        "§7最近扫描: §f" + DATE_FMT.format(new Date(s.latestScanTime())),
                         "§7▶ 点击进入区块详情"));
                 display.setItemMeta(meta);
             }
@@ -434,44 +434,27 @@ public class ViewCommandHandler implements SubCommandHandler {
 
     public void openFullView(Player p, int page, ViewGuiHolder back) {
         var db = plugin.getDatabaseManager();
-        // Aggregate chunk violation counts across ALL worlds (loaded chunks only)
-        Map<String, Integer> chunkCounts = new LinkedHashMap<>();
-        Map<String, String> chunkWorlds = new LinkedHashMap<>();
-        for (org.bukkit.World world : Bukkit.getWorlds()) {
-            for (org.bukkit.Chunk chunk : world.getLoadedChunks()) {
-                int c = db.countViolationsByChunk(world.getName(), chunk.getX(), chunk.getZ());
-                if (c > 0) {
-                    String key = world.getName() + "/" + chunk.getX() + "," + chunk.getZ();
-                    chunkCounts.put(key, c);
-                    chunkWorlds.put(key, world.getName());
-                }
-            }
-        }
-        List<String> keys = new ArrayList<>(chunkCounts.keySet());
-        keys.sort(Comparator.comparingInt(k -> -chunkCounts.get(k)));
-
-        int total = keys.size();
+        // Query DB directly for all chunks with violations across ALL worlds —
+        // not limited to currently-loaded chunks.
+        int total = db.countDistinctViolationChunksAllWorlds();
         int totalPages = Math.max(1, (total + PAGE_SIZE - 1) / PAGE_SIZE);
         if (page > totalPages) page = totalPages;
-        int start = (page - 1) * PAGE_SIZE, end = Math.min(start + PAGE_SIZE, total);
+        var summaries = db.getDistinctViolationChunksAllWorlds(page, PAGE_SIZE);
 
         String title = buildTitle("§8全服违规总览", page, totalPages);
         ViewGuiHolder holder = new ViewGuiHolder(ViewType.FULL, "", page, totalPages, back);
         Inventory gui = Bukkit.createInventory(holder, GUI_SIZE, title);
         int slot = 0;
-        for (int i = start; i < end; i++) {
-            String key = keys.get(i);
-            // Parse "world/chunkX,chunkZ"
-            int slash = key.indexOf('/');
-            String w = key.substring(0, slash);
-            String[] xy = key.substring(slash + 1).split(",");
-            int cx = Integer.parseInt(xy[0]), cz = Integer.parseInt(xy[1]);
-
+        for (var s : summaries) {
+            int cx = s.chunkX(), cz = s.chunkZ();
+            String w = s.world();
             ItemStack display = new ItemStack(Material.MAP);
             ItemMeta meta = display.getItemMeta();
             if (meta != null) {
                 meta.setDisplayName("§e" + w + " 区块(" + cx + "," + cz + ")");
-                meta.setLore(List.of("§7违规数: §c" + chunkCounts.get(key), "§7▶ 点击进入区块详情"));
+                meta.setLore(List.of("§7违规数: §c" + s.recordCount(),
+                        "§7最近扫描: §f" + DATE_FMT.format(new Date(s.latestScanTime())),
+                        "§7▶ 点击进入区块详情"));
                 display.setItemMeta(meta);
             }
             holder.slotChunks.put(slot, new int[]{cx, cz});
@@ -641,6 +624,13 @@ public class ViewCommandHandler implements SubCommandHandler {
                 lore.add("§7▶ 点击查看详情");
 
                 meta.setLore(lore);
+
+                // Glow effect for active (RUNNING/PAUSED) sessions
+                if ("RUNNING".equals(s.status()) || "PAUSED".equals(s.status())) {
+                    meta.addEnchant(Enchantment.UNBREAKING, 1, true);
+                    meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+                }
+
                 display.setItemMeta(meta);
             }
             gui.setItem(i, display);
@@ -869,7 +859,28 @@ public class ViewCommandHandler implements SubCommandHandler {
             // COMPLETED: no action buttons
         }
 
+        // ---- Refresh button (slot 14) ----
+        ItemStack refreshBtn = new ItemStack(Material.CLOCK);
+        ItemMeta rfMeta = refreshBtn.getItemMeta();
+        if (rfMeta != null) {
+            boolean isActive = "RUNNING".equals(session.status()) || "PAUSED".equals(session.status());
+            rfMeta.setDisplayName(isActive ? "§e⟳ 刷新进度 §a(自动刷新中)" : "§e⟳ 刷新进度");
+            List<String> rfLore = new ArrayList<>();
+            if (isActive) {
+                rfLore.add("§7每3秒自动刷新");
+            }
+            rfLore.add("§7点击立即刷新");
+            rfMeta.setLore(rfLore);
+            refreshBtn.setItemMeta(rfMeta);
+        }
+        gui.setItem(14, refreshBtn);
+
         p.openInventory(gui);
+
+        // Start auto-refresh for active sessions
+        if ("RUNNING".equals(status) || "PAUSED".equals(status)) {
+            startAutoRefresh(p, sessionId);
+        }
     }
 
     /** Chunk summary: show chunks in this scan session (like world view). */
@@ -1258,6 +1269,54 @@ public class ViewCommandHandler implements SubCommandHandler {
     boolean hasAccess(CommandSender sender) {
         if (plugin.getPlayerWhitelistManager() != null && plugin.getPlayerWhitelistManager().shouldSuppressLogging(sender)) return true;
         return sender.hasPermission("illegalscanner.report");
+    }
+
+    // ==================== Auto-Refresh for Scan Session View ====================
+
+    /** Start auto-refreshing the scan session view for a player. */
+    void startAutoRefresh(Player p, int sessionId) {
+        stopAutoRefresh(p);
+        UUID uuid = p.getUniqueId();
+
+        BukkitTask task = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            if (!p.isOnline()) {
+                stopAutoRefresh(p);
+                return;
+            }
+            // Verify player is still viewing this scan session
+            var topInv = p.getOpenInventory().getTopInventory();
+            if (!(topInv.getHolder() instanceof ViewGuiHolder holder)
+                    || holder.type != ViewType.SCAN
+                    || !holder.context.equals(String.valueOf(sessionId))) {
+                stopAutoRefresh(p);
+                return;
+            }
+            // Check if session is still active
+            String currentStatus = plugin.getScanService().getSessionStatus(sessionId);
+            if (!"RUNNING".equals(currentStatus) && !"PAUSED".equals(currentStatus)) {
+                stopAutoRefresh(p);
+                // Show final state
+                openScanView(p, sessionId, 1, holder.back);
+                return;
+            }
+            // Refresh in-place
+            openScanView(p, sessionId, 1, holder.back);
+        }, REFRESH_INTERVAL_TICKS, REFRESH_INTERVAL_TICKS);
+
+        autoRefresh.put(uuid, new RefreshState(sessionId, task));
+    }
+
+    /** Stop auto-refreshing for a player. Safe to call even if no refresh is active. */
+    public void stopAutoRefresh(Player p) {
+        RefreshState state = autoRefresh.remove(p.getUniqueId());
+        if (state != null) {
+            state.task().cancel();
+        }
+    }
+
+    /** Whether this player has an active auto-refresh task. */
+    public boolean isAutoRefreshing(Player p) {
+        return autoRefresh.containsKey(p.getUniqueId());
     }
 
     // ==================== View GUI Holder ====================
