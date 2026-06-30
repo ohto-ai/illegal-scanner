@@ -175,7 +175,7 @@ public final class ContainerUtil {
     /**
      * Map block material to a human-readable container type name.
      */
-    private static String getContainerTypeName(Material material) {
+    static String getContainerTypeName(Material material) {
         return switch (material) {
             case CHEST -> "CHEST";
             case TRAPPED_CHEST -> "TRAPPED_CHEST";
@@ -198,6 +198,35 @@ public final class ContainerUtil {
             case DECORATED_POT -> "DECORATED_POT";
             case CRAFTER -> "CRAFTER";
             default -> null; // Not a container we care about
+        };
+    }
+
+    /**
+     * Map a block entity NBT id string to a human-readable container type name.
+     * Used by McaChunkReader to classify containers from raw chunk NBT.
+     */
+    static String getContainerTypeNameFromNbtId(String nbtId) {
+        return switch (nbtId) {
+            case "minecraft:chest" -> "CHEST";
+            case "minecraft:trapped_chest" -> "TRAPPED_CHEST";
+            case "minecraft:barrel" -> "BARREL";
+            case "minecraft:furnace" -> "FURNACE";
+            case "minecraft:blast_furnace" -> "BLAST_FURNACE";
+            case "minecraft:smoker" -> "SMOKER";
+            case "minecraft:dispenser" -> "DISPENSER";
+            case "minecraft:dropper" -> "DROPPER";
+            case "minecraft:hopper" -> "HOPPER";
+            case "minecraft:brewing_stand" -> "BREWING_STAND";
+            case "minecraft:lectern" -> "LECTERN";
+            case "minecraft:chiseled_bookshelf" -> "CHISELED_BOOKSHELF";
+            case "minecraft:decorated_pot" -> "DECORATED_POT";
+            case "minecraft:crafter" -> "CRAFTER";
+            default -> {
+                if (nbtId.startsWith("minecraft:") && nbtId.contains("shulker_box")) {
+                    yield "SHULKER_BOX";
+                }
+                yield null; // Not a container we care about
+            }
         };
     }
 

@@ -12,6 +12,8 @@ database:
 scan:
   scan_chunks_per_tick: 5           # Chunks processed per tick during scans (increase for faster scans, lower if TPS drops)
   scan_dedup_enabled: true          # Skip chunks already scanned by a newer concurrent command
+  mca_direct_read: true             # Read unloaded chunks directly from .mca files (no chunk load, no worldgen)
+  mca_async_window: 40              # Max in-flight async MCA reads; higher = faster but more memory
 
   # Periodic loaded-chunk scanner (safety net)
   periodic_scan_enabled: true

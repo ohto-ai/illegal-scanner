@@ -40,7 +40,8 @@ public class HistoryCommandHandler implements SubCommandHandler {
         int cx = p.getLocation().getChunk().getX();
         int cz = p.getLocation().getChunk().getZ();
         var records = plugin.getDatabaseManager().getRecordsByChunk(p.getWorld().getName(), cx, cz, page, 10);
-        int total = plugin.getDatabaseManager().countRecordsByChunk(p.getWorld().getName(), cx, cz);
+        records.removeIf(r -> "CLEAN".equals(r.severity()));
+        int total = plugin.getDatabaseManager().countViolationsByChunk(p.getWorld().getName(), cx, cz);
         int totalPages = Math.max(1, (total + 9) / 10);
 
         p.sendMessage("§6===== 区块(" + cx + "," + cz + ") 历史记录 =====");

@@ -63,7 +63,7 @@ public class ReportCommandHandler implements SubCommandHandler {
         var db = plugin.getDatabaseManager();
         var records = db.getRecordsByChunk(world, cx, cz, page, PAGE_SIZE);
         records.removeIf(r -> "CLEAN".equals(r.severity()));
-        int total = db.countRecordsByChunk(world, cx, cz);
+        int total = db.countViolationsByChunk(world, cx, cz);
         int totalPages = Math.max(1, (total + PAGE_SIZE - 1) / PAGE_SIZE);
 
         sender.sendMessage("§6===== 区块(" + cx + "," + cz + ") 违禁报告 =====");
@@ -342,6 +342,17 @@ public class ReportCommandHandler implements SubCommandHandler {
         for (org.bukkit.Chunk chunk : bukkitWorld.getLoadedChunks()) {
             allRecords.addAll(db.getRecordsByChunk(world, chunk.getX(), chunk.getZ(), 1, Integer.MAX_VALUE));
         }
+        // Dedup by item_hash (keep latest), then filter CLEAN markers
+        java.util.Map<String, UnifiedRecord> deduped = new java.util.LinkedHashMap<>();
+        for (UnifiedRecord r : allRecords) {
+            String k = r.itemHash();
+            UnifiedRecord existing = deduped.get(k);
+            if (existing == null || r.scanTime() > existing.scanTime()) {
+                deduped.put(k, r);
+            }
+        }
+        allRecords = new ArrayList<>(deduped.values());
+        allRecords.removeIf(r -> "CLEAN".equals(r.severity()));
         allRecords.sort((a, b) -> Long.compare(b.scanTime(), a.scanTime()));
 
         int total = allRecords.size();

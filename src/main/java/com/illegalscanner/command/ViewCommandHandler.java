@@ -305,7 +305,7 @@ public class ViewCommandHandler implements SubCommandHandler {
         Map<String, Integer> chunkCounts = new LinkedHashMap<>();
         Map<String, Long> chunkLatest = new LinkedHashMap<>();
         for (var chunk : p.getWorld().getLoadedChunks()) {
-            int count = db.countRecordsByChunk(worldName, chunk.getX(), chunk.getZ());
+            int count = db.countViolationsByChunk(worldName, chunk.getX(), chunk.getZ());
             if (count > 0) {
                 String key = chunk.getX() + "," + chunk.getZ();
                 chunkCounts.put(key, count);
@@ -351,7 +351,7 @@ public class ViewCommandHandler implements SubCommandHandler {
         Map<String, Integer> chunkCounts = new LinkedHashMap<>();
         for (int cx = minCX; cx <= maxCX; cx++)
             for (int cz = minCZ; cz <= maxCZ; cz++) {
-                int c = db.countRecordsByChunk(worldName, cx, cz);
+                int c = db.countViolationsByChunk(worldName, cx, cz);
                 if (c > 0) chunkCounts.put(cx + "," + cz, c);
             }
         List<String> keys = new ArrayList<>(chunkCounts.keySet());
@@ -397,7 +397,7 @@ public class ViewCommandHandler implements SubCommandHandler {
         Map<String, Integer> chunkCounts = new LinkedHashMap<>();
         for (int cx = minCX; cx <= maxCX; cx++)
             for (int cz = minCZ; cz <= maxCZ; cz++) {
-                int c = db.countRecordsByChunk(worldName, cx, cz);
+                int c = db.countViolationsByChunk(worldName, cx, cz);
                 if (c > 0) chunkCounts.put(cx + "," + cz, c);
             }
         List<String> keys = new ArrayList<>(chunkCounts.keySet());
@@ -439,7 +439,7 @@ public class ViewCommandHandler implements SubCommandHandler {
         Map<String, String> chunkWorlds = new LinkedHashMap<>();
         for (org.bukkit.World world : Bukkit.getWorlds()) {
             for (org.bukkit.Chunk chunk : world.getLoadedChunks()) {
-                int c = db.countRecordsByChunk(world.getName(), chunk.getX(), chunk.getZ());
+                int c = db.countViolationsByChunk(world.getName(), chunk.getX(), chunk.getZ());
                 if (c > 0) {
                     String key = world.getName() + "/" + chunk.getX() + "," + chunk.getZ();
                     chunkCounts.put(key, c);

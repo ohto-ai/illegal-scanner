@@ -49,7 +49,7 @@ public class UnifiedQueryService {
     }
 
     public int countChunkRecords(String world, int chunkX, int chunkZ) {
-        return db.countRecordsByChunk(world, chunkX, chunkZ);
+        return db.countViolationsByChunk(world, chunkX, chunkZ);
     }
 
     public void invalidateChunk(String world, int chunkX, int chunkZ) {

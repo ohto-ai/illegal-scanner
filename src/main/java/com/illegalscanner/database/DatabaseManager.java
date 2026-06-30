@@ -5,7 +5,9 @@ import com.illegalscanner.IllegalScanner;
 import java.io.File;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -763,6 +765,28 @@ public class DatabaseManager {
                 return rs.next() ? rs.getInt(1) : 0;
             }
         } catch (SQLException e) { return 0; }
+    }
+
+    /**
+     * Count actual (non-CLEAN, deduplicated) violations for a chunk.
+     * Deduplicates by item_hash (keeps latest record), then excludes CLEAN markers.
+     * This gives the true violation count visible in chunk detail views.
+     */
+    public int countViolationsByChunk(String world, int chunkX, int chunkZ) {
+        List<UnifiedRecord> all = getRecordsByChunk(world, chunkX, chunkZ, 1, Integer.MAX_VALUE);
+        Map<String, UnifiedRecord> deduped = new LinkedHashMap<>();
+        for (UnifiedRecord r : all) {
+            String k = r.itemHash();
+            UnifiedRecord existing = deduped.get(k);
+            if (existing == null || r.scanTime() > existing.scanTime()) {
+                deduped.put(k, r);
+            }
+        }
+        int count = 0;
+        for (UnifiedRecord r : deduped.values()) {
+            if (!"CLEAN".equals(r.severity())) count++;
+        }
+        return count;
     }
 
     /** Query records by player (union of scan + monitor). */
