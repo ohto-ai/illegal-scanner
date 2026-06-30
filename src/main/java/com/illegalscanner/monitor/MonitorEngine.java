@@ -18,6 +18,7 @@ import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.block.BlockState;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -186,16 +187,115 @@ public class MonitorEngine implements Listener {
         });
     }
 
+    // ==================== Container Close (re-scan snapshot) ====================
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (!enabled.get() || !activeEvents.contains(MonitorEventType.CONTAINER_OPEN)) return;
+        if (!(event.getPlayer() instanceof Player player)) return;
+
+        // Whitelisted players can silently modify containers — skip re-scan.
+        // Container state will be updated on the next chunk scan.
+        if (isPlayerExempt(player)) return;
+
+        Inventory inventory = event.getInventory();
+        InventoryHolder holder = inventory.getHolder();
+
+        // Only handle block containers (chests, barrels, furnaces, etc.)
+        if (!(holder instanceof Container)) return;
+
+        // Defer to next tick to avoid blocking inventory close
+        Location containerLoc = ((Container) holder).getLocation();
+        if (containerLoc == null) return;
+
+        final Player finalPlayer = player;
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            scanSingleContainer(inventory, containerLoc, finalPlayer);
+        });
+    }
+
+    /**
+     * Scan a single block container's contents and record a CONTAINER_CLOSE snapshot.
+     * Deletes all old monitor records for this container, then compares current
+     * violations against old scan records. Items that were in old scans but are
+     * now gone get a CONTAINER_CLEAN marker so the View hides them.
+     */
+    private void scanSingleContainer(Inventory inventory, Location containerLoc, Player player) {
+        String worldName = containerLoc.getWorld() != null ? containerLoc.getWorld().getName() : "unknown";
+        String containerLocStr = worldName + "," + containerLoc.getBlockX() + ","
+                + containerLoc.getBlockY() + "," + containerLoc.getBlockZ();
+        String containerType = inventory.getType().name();
+        int chunkX = containerLoc.getBlockX() >> 4;
+        int chunkZ = containerLoc.getBlockZ() >> 4;
+        long now = System.currentTimeMillis();
+
+        // 1. Delete all old monitor records for this container (scan覆盖monitor)
+        plugin.getDatabaseManager().deleteMonitorRecordsByContainerLoc(containerLocStr);
+
+        // 2. Get old scan item_hashes for this container — these need to be
+        //    superseded if the items are no longer present
+        java.util.Set<String> oldScanHashes = plugin.getDatabaseManager()
+                .getScanItemHashesByContainerLoc(containerLocStr);
+
+        // 3. Scan each slot, collect current violation hashes
+        java.util.Set<String> currentHashes = new java.util.HashSet<>();
+        int slot = 0;
+        for (ItemStack item : inventory.getContents()) {
+            if (item != null && !item.getType().isAir()) {
+                List<Violation> violations = plugin.getValidationEngine().validate(item, containerLoc);
+                if (!violations.isEmpty()) {
+                    ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
+                    String itemHash = plugin.getItemHashService().resolve(item);
+                    if (itemHash != null) {
+                        currentHashes.add(itemHash);
+
+                        if (plugin.getQueryService() != null) {
+                            plugin.getQueryService().invalidateAll();
+                        }
+
+                        String violationJson = buildViolationJson(violations);
+                        MonitorRecord record = new MonitorRecord(
+                                0, itemHash, "CONTAINER_CLOSE",
+                                worldName, chunkX, chunkZ,
+                                player.getUniqueId().toString(), player.getName(),
+                                slot, containerType, containerLocStr,
+                                violationJson, severity.name(), now);
+                        plugin.getDatabaseManager().insertMonitorRecord(record);
+
+                        if (severity == ValidationResult.ILLEGAL
+                                && plugin.getConfigManager().getConfig().getBoolean("alerts.console_log", true)) {
+                            plugin.getLogger().warning("[CONTAINER_CLOSE] ILLEGAL: " + item.getType().name()
+                                    + " from container @ " + containerLocStr
+                                    + " (closed by " + player.getName() + ")"
+                                    + " - " + violations.size() + " violations");
+                        }
+                    }
+                }
+            }
+            slot++;
+        }
+
+        // 4. For old scan items that are NO LONGER in the container,
+        //    insert a CONTAINER_CLEAN marker to supersede the old scan record.
+        //    The View dedup keeps the latest record per item_hash (CONTAINER_CLEAN wins),
+        //    then filters out severity=CLEAN records — effectively hiding the item.
+        for (String oldHash : oldScanHashes) {
+            if (!currentHashes.contains(oldHash)) {
+                MonitorRecord cleanRecord = new MonitorRecord(
+                        0, oldHash, "CONTAINER_CLEAN",
+                        worldName, chunkX, chunkZ,
+                        player.getUniqueId().toString(), player.getName(),
+                        null, containerType, containerLocStr,
+                        "[]", "CLEAN", now);
+                plugin.getDatabaseManager().insertMonitorRecord(cleanRecord);
+            }
+        }
+    }
+
     // ==================== Core Logic ====================
 
     private void checkItem(ItemStack item, Player player, Inventory inventory, int slot, String eventType) {
-        Location loc = player.getLocation();
-        List<Violation> violations = plugin.getValidationEngine().validate(item, loc);
-        if (violations.isEmpty()) return;
-
-        ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
-
-        // Determine container type (player inventory vs block container)
+        // Determine container type and correct location for validation & recording
         InventoryHolder holder = inventory.getHolder();
         String container;
         Location containerLoc;
@@ -203,17 +303,28 @@ public class MonitorEngine implements Listener {
         String pName = null;
 
         if (holder instanceof Player p) {
+            // Player's own inventory — use player location (will be filtered from chunk views)
             container = "inventory";
             containerLoc = p.getLocation();
             pUuid = p.getUniqueId().toString();
             pName = p.getName();
         } else if (holder instanceof Container c) {
+            // Block container (chest, barrel, etc.) — use the container's fixed location
             container = c.getInventory().getType().name();
             containerLoc = c.getLocation();
         } else {
+            // Virtual inventory or unknown — fall back to player location
             container = inventory.getType().name();
             containerLoc = player.getLocation();
         }
+
+        // Validate using the correct location (container location for block containers,
+        // player location for player inventories) so region whitelist checks are accurate
+        Location loc = containerLoc != null ? containerLoc : player.getLocation();
+        List<Violation> violations = plugin.getValidationEngine().validate(item, loc);
+        if (violations.isEmpty()) return;
+
+        ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
 
         recordMonitor(item, slot, container, containerLoc, pUuid, pName, violations, severity, eventType);
 

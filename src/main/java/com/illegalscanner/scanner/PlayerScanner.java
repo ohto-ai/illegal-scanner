@@ -91,18 +91,46 @@ public class PlayerScanner {
     }
 
     /**
-     * Scan an offline player's inventory (deferred — needs NBT parsing).
+     * Scan an offline player's inventory by parsing their .dat file.
      */
     public int scanOfflinePlayer(OfflinePlayer offlinePlayer, ChunkScanner.ViolationCallback callback) {
+        // Player whitelist check
+        if (plugin.getPlayerWhitelistManager() != null
+                && plugin.getPlayerWhitelistManager().isWhitelisted(offlinePlayer.getUniqueId())) {
+            return 0;
+        }
+
         File playerDataFolder = new File(
                 plugin.getServer().getWorlds().get(0).getWorldFolder(), "playerdata");
         File playerFile = new File(playerDataFolder, offlinePlayer.getUniqueId() + ".dat");
 
         if (!playerFile.exists()) return 0;
 
-        // TODO: Phase 6 — NBT parsing of player .dat files
-        plugin.getLogger().fine("Offline player scan deferred: " + offlinePlayer.getUniqueId());
-        return 0;
+        // Read inventory items from NBT
+        List<ItemStack> items = NbtUtil.readPlayerInventory(playerFile, plugin);
+        if (items.isEmpty()) return 0;
+
+        int totalFlagged = 0;
+        Location loc = offlinePlayer.getBedSpawnLocation() != null
+                ? offlinePlayer.getBedSpawnLocation()
+                : new Location(plugin.getServer().getWorlds().get(0), 0, 0, 0);
+
+        for (int slot = 0; slot < items.size(); slot++) {
+            ItemStack item = items.get(slot);
+            if (item == null || item.getType().isAir()) continue;
+
+            List<Violation> violations = plugin.getValidationEngine().validate(item, loc);
+            if (violations.isEmpty()) continue;
+
+            ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
+            String container = slot < 36 ? "inventory" : "enderchest";
+            if (callback != null) {
+                callback.onViolation(item, slot, container, loc, violations, severity);
+            }
+            totalFlagged++;
+        }
+
+        return totalFlagged;
     }
 
     /**
@@ -110,7 +138,7 @@ public class PlayerScanner {
      */
     public int scanAllOnlinePlayers(ChunkScanner.ViolationCallback callback) {
         int totalFlagged = 0;
-        for (Player player : Bukkit.getOnlinePlayers()) {
+        for (Player player : plugin.getServer().getOnlinePlayers()) {
             try {
                 totalFlagged += scanOnlinePlayer(player, callback);
             } catch (Exception e) {
@@ -125,7 +153,9 @@ public class PlayerScanner {
      */
     public int scanAllOfflinePlayers(ChunkScanner.ViolationCallback callback) {
         int totalFlagged = 0;
-        for (org.bukkit.World world : Bukkit.getWorlds()) {
+        java.util.Set<UUID> scanned = new java.util.HashSet<>();
+
+        for (org.bukkit.World world : plugin.getServer().getWorlds()) {
             File playerDataFolder = new File(world.getWorldFolder(), "playerdata");
             if (!playerDataFolder.exists() || !playerDataFolder.isDirectory()) continue;
             File[] playerFiles = playerDataFolder.listFiles((dir, name) -> name.endsWith(".dat"));
@@ -134,7 +164,9 @@ public class PlayerScanner {
                 try {
                     String uuidStr = file.getName().replace(".dat", "");
                     UUID uuid = UUID.fromString(uuidStr);
-                    OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(uuid);
+                    // Dedup across worlds
+                    if (!scanned.add(uuid)) continue;
+                    OfflinePlayer offlinePlayer = plugin.getServer().getOfflinePlayer(uuid);
                     totalFlagged += scanOfflinePlayer(offlinePlayer, callback);
                 } catch (Exception e) {
                     plugin.getLogger().log(Level.WARNING, "Error scanning offline player file: " + file.getName(), e);

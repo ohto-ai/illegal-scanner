@@ -1,15 +1,23 @@
 package com.illegalscanner.scanner;
 
+import com.illegalscanner.IllegalScanner;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.Tag;
+import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.inventory.ItemStack;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.logging.Level;
 
 /**
  * Utility for NBT serialization of ItemStacks.
- * Uses Paper 1.21's built-in serializeAsBytes/deserializeBytes.
+ * Uses Paper's built-in serializeAsBytes/deserializeBytes.
  */
 public final class NbtUtil {
 
@@ -62,10 +70,92 @@ public final class NbtUtil {
     }
 
     /**
-     * Read player inventory from .dat file.
-     * TODO Phase 6: Full NBT parsing implementation.
+     * Read player inventory items from a Minecraft player .dat file.
+     * Parses the NBT compound and extracts items from the Inventory and EnderItems lists.
+     *
+     * @param playerDataFile the player's .dat file
+     * @param plugin         for logging
+     * @return list of ItemStacks found in the player's inventory and ender chest
      */
-    public static List<ItemStack> readPlayerInventory(File playerDataFile) {
-        return Collections.emptyList();
+    public static List<ItemStack> readPlayerInventory(File playerDataFile, IllegalScanner plugin) {
+        if (!playerDataFile.exists()) return Collections.emptyList();
+
+        List<ItemStack> items = new ArrayList<>();
+
+        CompoundTag root = null;
+        java.nio.file.Path path = playerDataFile.toPath();
+
+        // Detect compression by reading first 2 bytes (gzip magic = 0x1F 0x8B)
+        boolean isGzip = false;
+        try (java.io.InputStream probeIn = java.nio.file.Files.newInputStream(path)) {
+            byte[] magic = new byte[2];
+            if (probeIn.read(magic) == 2) {
+                isGzip = (magic[0] == (byte) 0x1F && magic[1] == (byte) 0x8B);
+            }
+        } catch (Exception ignored) {}
+
+        try {
+            if (isGzip) {
+                // Read gzip-compressed NBT
+                java.io.DataInputStream dis = new java.io.DataInputStream(
+                        new java.util.zip.GZIPInputStream(java.nio.file.Files.newInputStream(path)));
+                root = NbtIo.read(dis);
+                dis.close();
+            } else {
+                // Read uncompressed NBT
+                java.io.DataInputStream dis = new java.io.DataInputStream(
+                        new java.io.BufferedInputStream(java.nio.file.Files.newInputStream(path)));
+                root = NbtIo.read(dis);
+                dis.close();
+            }
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING,
+                    "Failed to read player data: " + playerDataFile.getName()
+                            + " (gzip=" + isGzip + ") - " + e.getMessage());
+            return items;
+        }
+
+        if (root == null) return items;
+
+        try {
+            // Get registry access from NMS server (1.20.6 compatible)
+            net.minecraft.core.RegistryAccess registryAccess =
+                    ((org.bukkit.craftbukkit.CraftServer) plugin.getServer())
+                            .getServer().registryAccess();
+
+            // Read main Inventory list
+            if (root.contains("Inventory", Tag.TAG_LIST)) {
+                ListTag invList = root.getList("Inventory", Tag.TAG_COMPOUND);
+                for (int i = 0; i < invList.size(); i++) {
+                    CompoundTag itemTag = invList.getCompound(i);
+                    // 1.20.6: parseOptional returns ItemStack directly (not Optional)
+                    net.minecraft.world.item.ItemStack nmsItem =
+                            net.minecraft.world.item.ItemStack.parseOptional(
+                                    registryAccess, itemTag);
+                    if (!nmsItem.isEmpty()) {
+                        items.add(CraftItemStack.asBukkitCopy(nmsItem));
+                    }
+                }
+            }
+
+            // Read EnderItems list (ender chest contents)
+            if (root.contains("EnderItems", Tag.TAG_LIST)) {
+                ListTag enderList = root.getList("EnderItems", Tag.TAG_COMPOUND);
+                for (int i = 0; i < enderList.size(); i++) {
+                    CompoundTag itemTag = enderList.getCompound(i);
+                    net.minecraft.world.item.ItemStack nmsItem =
+                            net.minecraft.world.item.ItemStack.parseOptional(
+                                    registryAccess, itemTag);
+                    if (!nmsItem.isEmpty()) {
+                        items.add(CraftItemStack.asBukkitCopy(nmsItem));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING,
+                    "Failed to parse player inventory items: " + playerDataFile.getName() + " - " + e.getMessage());
+        }
+
+        return items;
     }
 }

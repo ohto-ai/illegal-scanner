@@ -68,7 +68,14 @@ public class WhitelistCommandHandler implements SubCommandHandler {
                 }
                 yield true;
             }
-            case "clear" -> { sender.sendMessage("§e功能待实现 (Phase 6)"); yield true; }
+            case "clear" -> {
+                var db = plugin.getDatabaseManager();
+                db.clearPlayerWhitelist().thenAccept(count -> {
+                    plugin.getPlayerWhitelistManager().loadCache();
+                    sender.sendMessage("§a已清空玩家白名单 (" + count + " 条)。");
+                });
+                yield true;
+            }
             default -> { sender.sendMessage("§e未知操作: " + args[0]); yield true; }
         };
     }
@@ -115,7 +122,13 @@ public class WhitelistCommandHandler implements SubCommandHandler {
                                 + (e.customNamePattern() != null ? " 名称:" + e.customNamePattern() : ""));
                 }
             }
-            case "clear" -> { sender.sendMessage("§e功能待实现 (Phase 6)"); }
+            case "clear" -> {
+                var db = plugin.getDatabaseManager();
+                db.clearItemWhitelist().thenAccept(count -> {
+                    plugin.getItemWhitelistManager().loadCache();
+                    sender.sendMessage("§a已清空物品白名单 (" + count + " 条)。");
+                });
+            }
             default -> { sender.sendMessage("§e未知操作: " + args[0]); }
         }
         return true;
@@ -148,7 +161,13 @@ public class WhitelistCommandHandler implements SubCommandHandler {
                     for (var e : entries) sender.sendMessage("§f#" + e.id() + " §7" + e.world() + " 区块(" + (e.minX()/16) + "," + (e.minZ()/16) + ")");
                 }
             }
-            case "clear" -> { sender.sendMessage("§e功能待实现 (Phase 6)"); }
+            case "clear" -> {
+                var db = plugin.getDatabaseManager();
+                db.clearAreaWhitelistByType("CHUNK").thenAccept(count -> {
+                    plugin.getRegionWhitelistManager().loadCache();
+                    sender.sendMessage("§a已清空区块白名单 (" + count + " 条)。");
+                });
+            }
             default -> { sender.sendMessage("§e未知操作: " + args[0]); }
         }
         return true;
@@ -184,7 +203,13 @@ public class WhitelistCommandHandler implements SubCommandHandler {
                     for (var e : entries) sender.sendMessage("§f#" + e.id() + " §7" + e.world() + " [" + e.minX() + "," + e.minZ() + " ~ " + e.maxX() + "," + e.maxZ() + "]");
                 }
             }
-            case "clear" -> { sender.sendMessage("§e功能待实现 (Phase 6)"); }
+            case "clear" -> {
+                var db = plugin.getDatabaseManager();
+                db.clearAreaWhitelistByType("AREA").thenAccept(count -> {
+                    plugin.getRegionWhitelistManager().loadCache();
+                    sender.sendMessage("§a已清空区域白名单 (" + count + " 条)。");
+                });
+            }
             default -> { sender.sendMessage("§e未知操作: " + args[0]); }
         }
         return true;
@@ -216,7 +241,13 @@ public class WhitelistCommandHandler implements SubCommandHandler {
                     for (var e : entries) sender.sendMessage("§f#" + e.id() + " §7" + e.pluginName() + "/" + e.regionName() + (e.worldName() != null ? " 世界:" + e.worldName() : ""));
                 }
             }
-            case "clear" -> { sender.sendMessage("§e功能待实现 (Phase 6)"); }
+            case "clear" -> {
+                var db = plugin.getDatabaseManager();
+                db.clearRegionWhitelist().thenAccept(count -> {
+                    plugin.getRegionWhitelistManager().loadCache();
+                    sender.sendMessage("§a已清空领地区域白名单 (" + count + " 条)。");
+                });
+            }
             default -> { sender.sendMessage("§e未知操作: " + args[0]); }
         }
         return true;
@@ -230,11 +261,36 @@ public class WhitelistCommandHandler implements SubCommandHandler {
             case "add" -> {
                 String world = args.length >= 2 ? args[1] : (sender instanceof Player p ? p.getWorld().getName() : null);
                 if (world == null) { sender.sendMessage("§e用法: /is whitelist world add <世界名>"); return true; }
-                sender.sendMessage("§e世界白名单将在 Phase 6 实现。");
+                // Verify world exists
+                if (Bukkit.getWorld(world) == null) {
+                    sender.sendMessage("§c未找到世界: " + world + " (世界名区分大小写)");
+                    return true;
+                }
+                int id = plugin.getRegionWhitelistManager().addWorldEntrySync(world);
+                if (id >= 0) sender.sendMessage("§a已将世界加入白名单 (#" + id + "): " + world);
+                else sender.sendMessage("§c添加失败（可能已存在）。");
             }
-            case "remove" -> { sender.sendMessage("§ePhase 6 实现。"); }
-            case "list" -> { sender.sendMessage("§ePhase 6 实现。"); }
-            case "clear" -> { sender.sendMessage("§ePhase 6 实现。"); }
+            case "remove" -> {
+                String world = args.length >= 2 ? args[1] : (sender instanceof Player p ? p.getWorld().getName() : null);
+                if (world == null) { sender.sendMessage("§e用法: /is whitelist world remove <世界名>"); return true; }
+                plugin.getRegionWhitelistManager().removeWorldEntry(world);
+                sender.sendMessage("§a已从白名单移除世界: " + world);
+            }
+            case "list" -> {
+                var entries = plugin.getRegionWhitelistManager().listWorldEntries();
+                if (entries.isEmpty()) sender.sendMessage("§a世界白名单为空。");
+                else {
+                    sender.sendMessage("§6===== 世界白名单 (" + entries.size() + ") =====");
+                    for (var e : entries) sender.sendMessage("§f#" + e.id() + " §7" + e.worldName());
+                }
+            }
+            case "clear" -> {
+                var db = plugin.getDatabaseManager();
+                db.clearWorldWhitelist().thenAccept(count -> {
+                    plugin.getRegionWhitelistManager().loadCache();
+                    sender.sendMessage("§a已清空世界白名单 (" + count + " 条)。");
+                });
+            }
             default -> { sender.sendMessage("§e未知操作: " + args[0]); }
         }
         return true;

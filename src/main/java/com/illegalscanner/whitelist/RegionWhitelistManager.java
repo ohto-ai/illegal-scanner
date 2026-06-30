@@ -37,6 +37,9 @@ public class RegionWhitelistManager {
     // worldName (lowercase) -> list of entries in that world
     private final Map<String, List<DatabaseManager.AreaWhitelistEntry>> worldAreaIndex = new HashMap<>();
 
+    // ---- World whitelist ----
+    private final Set<String> worldWhitelist = new HashSet<>();
+
     public RegionWhitelistManager(IllegalScanner plugin) {
         this.plugin = plugin;
         detectLandPlugins();
@@ -76,8 +79,12 @@ public class RegionWhitelistManager {
             rebuildRegionIndex();
             areaCache = plugin.getDatabaseManager().loadAreaWhitelist();
             rebuildAreaIndex();
+            // Load world whitelist
+            var worldEntries = plugin.getDatabaseManager().loadWorldWhitelist();
+            worldWhitelist.clear();
+            for (var e : worldEntries) worldWhitelist.add(e.worldName().toLowerCase());
             plugin.getLogger().info("Whitelists loaded: " + regionCache.size() + " regions, "
-                    + areaCache.size() + " areas/chunks");
+                    + areaCache.size() + " areas/chunks, " + worldWhitelist.size() + " worlds");
         } finally {
             lock.writeLock().unlock();
         }
@@ -112,6 +119,11 @@ public class RegionWhitelistManager {
 
         lock.readLock().lock();
         try {
+            // 0. Check world-level whitelist (fastest path)
+            if (worldWhitelist.contains(worldName)) {
+                return true;
+            }
+
             // 1. Check built-in chunk/area whitelist (always works, no plugin needed)
             if (checkAreaWhitelist(loc, worldName)) {
                 return true;
@@ -426,5 +438,47 @@ public class RegionWhitelistManager {
 
     public boolean hasAnyPlugin() {
         return !availablePlugins.isEmpty();
+    }
+
+    // ==================== World Whitelist ====================
+
+    /**
+     * Check if an entire world is whitelisted.
+     */
+    public boolean isWorldWhitelisted(String worldName) {
+        lock.readLock().lock();
+        try {
+            return worldWhitelist.contains(worldName.toLowerCase());
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Add a world to the whitelist (synchronous, returns new ID).
+     */
+    public int addWorldEntrySync(String worldName) {
+        try {
+            int id = plugin.getDatabaseManager().addWorldWhitelistEntry(worldName).get();
+            if (id >= 0) loadCache();
+            return id;
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to add world whitelist entry: " + e.getMessage());
+            return -1;
+        }
+    }
+
+    /**
+     * Remove a world from the whitelist.
+     */
+    public void removeWorldEntry(String worldName) {
+        plugin.getDatabaseManager().removeWorldWhitelistEntry(worldName).thenRun(this::loadCache);
+    }
+
+    /**
+     * Get all world whitelist entries.
+     */
+    public List<DatabaseManager.WorldWhitelistEntry> listWorldEntries() {
+        return plugin.getDatabaseManager().loadWorldWhitelist();
     }
 }

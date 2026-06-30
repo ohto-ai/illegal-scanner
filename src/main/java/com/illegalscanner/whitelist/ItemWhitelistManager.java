@@ -215,11 +215,53 @@ public class ItemWhitelistManager {
 
     /**
      * After adding a new item whitelist entry, scan existing records for matches.
-     * TODO Phase 6: Implement scan_records + monitor_records resolution logic.
+     * Returns the count of existing records that now match the whitelist (informational only).
      */
     public java.util.concurrent.CompletableFuture<Integer> cleanupAfterWhitelistAdd() {
-        // TODO Phase 6: Scan scan_records + monitor_records for items matching the whitelist
-        return java.util.concurrent.CompletableFuture.completedFuture(0);
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            int matched = 0;
+            lock.readLock().lock();
+            try {
+                var db = plugin.getDatabaseManager();
+                // Get all distinct item hashes that have active violation records
+                var items = db.getDistinctViolationItems();
+                for (var entry : items) {
+                    // Check against all current whitelist entries (skip hash-only entries —
+                    // those would have already been caught during scan time)
+                    for (var wl : cache) {
+                        // Only check non-hash entries (hash entries are exact-match only)
+                        if (wl.itemHash() == null || wl.itemHash().isEmpty()) {
+                            // Try to match by material
+                            if (entry.itemType().equals(wl.material())) {
+                                // For material-only entries, count all records for this item hash
+                                if (wl.customNamePattern() == null && wl.lorePattern() == null
+                                        && wl.enchantmentsJson() == null && wl.attributeModifiersJson() == null) {
+                                    matched += db.getItemRecordCount(entry.itemHash());
+                                    break;
+                                }
+                                // For entries with additional criteria, try to reconstruct the item
+                                // from snapshot and test match
+                                var snapshot = db.getItemByHash(entry.itemHash());
+                                if (snapshot != null) {
+                                    try {
+                                        var itemStack = com.illegalscanner.scanner.NbtUtil.itemStackFromJson(snapshot.itemSnapshot());
+                                        if (itemStack != null && matchesEntry(itemStack, wl)) {
+                                            matched += db.getItemRecordCount(entry.itemHash());
+                                            break;
+                                        }
+                                    } catch (Exception ignored) {
+                                        // Skip items that can't be deserialized
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } finally {
+                lock.readLock().unlock();
+            }
+            return matched;
+        }, plugin.getDatabaseManager().getDbExecutor());
     }
 
     /**

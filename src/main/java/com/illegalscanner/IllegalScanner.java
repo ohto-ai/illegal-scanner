@@ -9,6 +9,7 @@ import com.illegalscanner.listener.ViewGuiListener;
 import com.illegalscanner.listener.WhitelistGuiListener;
 import com.illegalscanner.monitor.MonitorEngine;
 import com.illegalscanner.query.UnifiedQueryService;
+import com.illegalscanner.scanner.ChunkScanDedupCache;
 import com.illegalscanner.scanner.ItemHashService;
 import com.illegalscanner.scanner.ScanService;
 import com.illegalscanner.validator.ValidationEngine;
@@ -55,10 +56,19 @@ public final class IllegalScanner extends JavaPlugin {
     public void onEnable() {
         instance = this;
 
-        getLogger().info("============================================");
-        getLogger().info("  illegal-scanner v" + getPluginMeta().getVersion());
-        getLogger().info("  Detecting illegal/overpowered items");
-        getLogger().info("============================================");
+        getLogger().info(" _|_|_|  _|  _|                                _|                      ");
+        getLogger().info("    _|    _|  _|    _|_|      _|_|_|    _|_|_|  _|                      ");
+        getLogger().info("    _|    _|  _|  _|_|_|_|  _|    _|  _|    _|  _|                      ");
+        getLogger().info("    _|    _|  _|  _|        _|    _|  _|    _|  _|                      ");
+        getLogger().info(" _|_|_|  _|  _|    _|_|_|    _|_|_|    _|_|_|  _|                      ");
+        getLogger().info("                                  _|                                    ");
+        getLogger().info("   _|_|_|                    _|_|                                      ");
+        getLogger().info(" _|          _|_|_|    _|_|_|  _|_|_|    _|_|_|      _|_|    _|  _|_|  ");
+        getLogger().info("    _|_|    _|        _|    _|  _|    _|  _|    _|  _|_|_|_|  _|_|      ");
+        getLogger().info("        _|  _|        _|    _|  _|    _|  _|    _|  _|        _|        ");
+        getLogger().info("  _|_|_|      _|_|_|    _|_|_|  _|    _|  _|    _|    _|_|_|  _|        ");
+        getLogger().info("");
+        getLogger().info("  Welcome! Illegal Scanner v" + getPluginMeta().getVersion() + " — Ready");
 
         // 1. Load configuration
         try {
@@ -83,11 +93,19 @@ public final class IllegalScanner extends JavaPlugin {
             return;
         }
 
-        // 3. Initialize ItemHashService
+        // 3. Reset stale scan sessions (RUNNING → STOPPED) left over from previous run
+        databaseManager.resetStaleSessionsOnStartup().thenAccept(count -> {
+            if (count > 0) {
+                getLogger().warning("Reset " + count + " stale RUNNING scan session(s) to STOPPED — "
+                        + "in-memory scan state does not survive server restarts.");
+            }
+        });
+
+        // 4. Initialize ItemHashService
         itemHashService = new ItemHashService(this);
         getLogger().info("Item hash service initialized.");
 
-        // 4. Initialize validation engine
+        // 5. Initialize validation engine
         try {
             validationEngine = new ValidationEngine(this);
             validationEngine.initialize();
@@ -99,30 +117,31 @@ public final class IllegalScanner extends JavaPlugin {
             return;
         }
 
-        // 5. Initialize whitelist managers
+        // 6. Initialize whitelist managers
         itemWhitelistManager = new ItemWhitelistManager(this);
         regionWhitelistManager = new RegionWhitelistManager(this);
         playerWhitelistManager = new PlayerWhitelistManager(this);
 
-        // 6. Initialize scan service
-        scanService = new ScanService(this);
+        // 7. Initialize scan service (with dedup cache)
+        ChunkScanDedupCache dedupCache = new ChunkScanDedupCache(this);
+        scanService = new ScanService(this, dedupCache);
         getLogger().info("Scan service initialized.");
 
-        // 7. Initialize unified query service
+        // 8. Initialize unified query service
         queryService = new UnifiedQueryService(this);
         getLogger().info("Query service initialized.");
 
-        // 8. Initialize monitor engine
+        // 9. Initialize monitor engine
         monitorEngine = new MonitorEngine(this);
         monitorEngine.start();
         getLogger().info("Monitor engine started.");
 
-        // 9. Register View GUI protection listener
+        // 10. Register View GUI protection listener
         getServer().getPluginManager().registerEvents(new ViewGuiListener(this), this);
         getServer().getPluginManager().registerEvents(new WhitelistGuiListener(this), this);
         getLogger().info("View GUI listener registered.");
 
-        // 10. Register commands
+        // 11. Register commands
         commandRouter = new CommandRouter(this);
         Objects.requireNonNull(getCommand("illegalscanner")).setExecutor(commandRouter);
         Objects.requireNonNull(getCommand("illegalscanner")).setTabCompleter(new ISTabCompleter(this));

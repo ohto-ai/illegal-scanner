@@ -34,9 +34,13 @@ public class ScanCommandHandler implements SubCommandHandler {
             case "area"   -> handleArea(sender, args);
             case "res"    -> handleRes(sender, args);
             case "world"  -> handleWorld(sender, args);
-            case "full"   -> handleFull(sender, args);
+            case "full"   -> handleFull(sender);
+            case "pause"  -> handlePause(sender, args);
+            case "resume" -> handleResume(sender, args);
+            case "stop"   -> handleStop(sender, args);
+            case "restart" -> handleRestart(sender, args);
             default -> {
-                sender.sendMessage("§e未知子命令: " + args[0] + "。可用: chunk|player|area|res|world|full");
+                sender.sendMessage("§e未知子命令: " + args[0] + "。可用: chunk|player|area|res|world|full|pause|resume|stop|restart");
                 yield true;
             }
         };
@@ -49,19 +53,83 @@ public class ScanCommandHandler implements SubCommandHandler {
         int cx = p.getLocation().getChunk().getX();
         int cz = p.getLocation().getChunk().getZ();
         sender.sendMessage("§e正在扫描当前区块 (" + cx + "," + cz + ")...");
-        int flagged = scanService.scanChunk(p.getWorld(), cx, cz);
+        int flagged = scanService.scanChunk(p.getWorld(), cx, cz, System.currentTimeMillis());
         sender.sendMessage("§a扫描完成: 发现 " + flagged + " 个违规物品。");
         return true;
     }
 
     private boolean handlePlayer(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("§e用法: /is scan player <玩家名>"); return true;
+            sender.sendMessage("§e用法: /is scan player [-online|-offline|-all] [<玩家名>]");
+            return true;
         }
-        String name = args[1];
-        sender.sendMessage("§e正在扫描玩家 " + name + "...");
-        int flagged = scanService.scanPlayer(name);
-        sender.sendMessage("§a扫描完成: 发现 " + flagged + " 个违规物品。");
+
+        String flag = null;
+        String name = null;
+
+        // Parse optional flag
+        if (args[1].startsWith("-")) {
+            flag = args[1].toLowerCase();
+            if (!flag.equals("-online") && !flag.equals("-offline") && !flag.equals("-all")) {
+                sender.sendMessage("§c未知标志: " + flag + "。可用: -online, -offline, -all");
+                return true;
+            }
+            if (args.length >= 3) name = args[2];
+        } else {
+            name = args[1]; // backward compatible: just a player name
+        }
+
+        // No flag, just a name — backward compatible (online first, then offline)
+        if (flag == null) {
+            sender.sendMessage("§e正在扫描玩家 " + name + "...");
+            int flagged = scanService.scanPlayer(name);
+            sender.sendMessage("§a扫描完成: 发现 " + flagged + " 个违规物品。");
+            return true;
+        }
+
+        // Batch: no name given → scan all players of that type
+        if (name == null) {
+            String modeLabel = flag.substring(1); // "online", "offline", or "all"
+            sender.sendMessage("§e正在扫描所有 " + modeLabel + " 玩家...");
+
+            if (flag.equals("-online")) {
+                scanService.scanAllOnlinePlayers()
+                        .thenAccept(count -> sender.sendMessage("§a所有在线玩家扫描完成: 发现 " + count + " 个违规物品。"));
+            } else if (flag.equals("-offline")) {
+                scanService.scanAllOfflinePlayers()
+                        .thenAccept(count -> sender.sendMessage("§a所有离线玩家扫描完成: 发现 " + count + " 个违规物品。"));
+            } else { // -all
+                var onlineFuture = scanService.scanAllOnlinePlayers();
+                var offlineFuture = scanService.scanAllOfflinePlayers();
+                onlineFuture.thenCombine(offlineFuture, (online, offline) -> {
+                    sender.sendMessage("§a全量玩家扫描完成: 在线 " + online + " + 离线 " + offline + " = " + (online + offline) + " 个违规物品。");
+                    return online + offline;
+                });
+            }
+            return true;
+        }
+
+        // Flag + name: scan specific player in that mode
+        sender.sendMessage("§e正在扫描玩家 " + name + " (" + flag.substring(1) + ")...");
+
+        if (flag.equals("-online")) {
+            int flagged = scanService.scanOnlinePlayerByName(name);
+            if (flagged < 0) {
+                sender.sendMessage("§c玩家不在线: " + name);
+            } else {
+                sender.sendMessage("§a扫描完成: 发现 " + flagged + " 个违规物品。");
+            }
+        } else if (flag.equals("-offline")) {
+            int flagged = scanService.scanOfflinePlayerByName(name);
+            if (flagged < 0) {
+                sender.sendMessage("§c未找到离线玩家数据: " + name);
+            } else {
+                sender.sendMessage("§a扫描完成: 发现 " + flagged + " 个违规物品。");
+            }
+        } else { // -all
+            int flagged = scanService.scanPlayer(name); // tries online first, then offline
+            sender.sendMessage("§a扫描完成: 发现 " + flagged + " 个违规物品。");
+        }
         return true;
     }
 
@@ -95,22 +163,147 @@ public class ScanCommandHandler implements SubCommandHandler {
     }
 
     private boolean handleWorld(CommandSender sender, String[] args) {
-        String world = args.length >= 2 ? args[1]
-                : (sender instanceof Player p ? p.getWorld().getName() : null);
-        if (world == null) {
-            sender.sendMessage("§e用法: /is scan world <世界名>"); return true;
+        String flag = "all"; // default
+        String worldName = null;
+        int argIdx = 1;
+
+        // Parse optional flag
+        if (args.length >= 2 && args[1].startsWith("-")) {
+            flag = args[1].toLowerCase();
+            String mode = flag.substring(1); // "loaded", "unloaded", "all"
+            if (!mode.equals("loaded") && !mode.equals("unloaded") && !mode.equals("all")) {
+                sender.sendMessage("§c未知标志: " + flag + "。可用: -loaded, -unloaded, -all");
+                return true;
+            }
+            argIdx = 2;
         }
-        sender.sendMessage("§e正在扫描世界 " + world + "...");
-        scanService.scanWorld(world)
+
+        // Parse optional world name
+        if (args.length > argIdx) {
+            worldName = args[argIdx];
+        }
+
+        if (worldName == null) {
+            if (sender instanceof Player p) {
+                worldName = p.getWorld().getName();
+            } else {
+                sender.sendMessage("§e用法: /is scan world [-loaded|-unloaded|-all] [世界名]");
+                return true;
+            }
+        }
+
+        String modeLabel = flag.substring(1);
+        sender.sendMessage("§e正在扫描世界 " + worldName + " (" + modeLabel + " 模式)...");
+        scanService.scanWorld(worldName, modeLabel)
                 .thenAccept(count -> sender.sendMessage("§a世界扫描完成: 发现 " + count + " 个违规物品。"));
         return true;
     }
 
-    private boolean handleFull(CommandSender sender, String[] args) {
-        String world = args.length >= 2 ? args[1] : null;
-        sender.sendMessage("§e正在启动全盘扫描" + (world != null ? " (世界: " + world + ")" : "") + "...");
+    private boolean handleFull(CommandSender sender) {
+        sender.sendMessage("§e正在排列全服扫描任务（所有世界的已加载区块）...");
         scanService.scanFull()
-                .thenAccept(count -> sender.sendMessage("§a全盘扫描完成: 发现 " + count + " 个违规物品。"));
+                .thenAccept(count -> sender.sendMessage("§a全服扫描完成: 发现 " + count + " 个违规物品。"));
+        return true;
+    }
+
+    private boolean handlePause(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§e用法: /is scan pause <sessionId>");
+            return true;
+        }
+        try {
+            int sessionId = Integer.parseInt(args[1]);
+            String status = scanService.getSessionStatus(sessionId);
+            if (status == null) {
+                sender.sendMessage("§c未找到扫描会话 #" + sessionId);
+                return true;
+            }
+            if (!"RUNNING".equals(status)) {
+                sender.sendMessage("§c扫描会话 #" + sessionId + " 当前状态为 " + status + "，无法暂停。");
+                return true;
+            }
+            scanService.pauseScan(sessionId);
+            sender.sendMessage("§e扫描会话 #" + sessionId + " 已暂停。");
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c无效的会话ID。");
+        }
+        return true;
+    }
+
+    private boolean handleResume(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§e用法: /is scan resume <sessionId>");
+            return true;
+        }
+        try {
+            int sessionId = Integer.parseInt(args[1]);
+            String status = scanService.getSessionStatus(sessionId);
+            if (status == null) {
+                sender.sendMessage("§c未找到扫描会话 #" + sessionId);
+                return true;
+            }
+            if (!"PAUSED".equals(status)) {
+                sender.sendMessage("§c扫描会话 #" + sessionId + " 当前状态为 " + status + "，无法继续。");
+                return true;
+            }
+            scanService.resumeScan(sessionId);
+            sender.sendMessage("§a扫描会话 #" + sessionId + " 已继续。"
+                    + " (如暂停状态因重启丢失，将自动重新开始扫描)");
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c无效的会话ID。");
+        }
+        return true;
+    }
+
+    private boolean handleStop(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§e用法: /is scan stop <sessionId>");
+            return true;
+        }
+        try {
+            int sessionId = Integer.parseInt(args[1]);
+            String status = scanService.getSessionStatus(sessionId);
+            if (status == null) {
+                sender.sendMessage("§c未找到扫描会话 #" + sessionId);
+                return true;
+            }
+            if (!"RUNNING".equals(status) && !"PAUSED".equals(status)) {
+                sender.sendMessage("§c扫描会话 #" + sessionId + " 当前状态为 " + status + "，无法停止。");
+                return true;
+            }
+            scanService.stopScan(sessionId);
+            sender.sendMessage("§c扫描会话 #" + sessionId + " 已停止。");
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c无效的会话ID。");
+        }
+        return true;
+    }
+
+    private boolean handleRestart(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§e用法: /is scan restart <sessionId>");
+            return true;
+        }
+        try {
+            int sessionId = Integer.parseInt(args[1]);
+            String status = scanService.getSessionStatus(sessionId);
+            if (status == null) {
+                sender.sendMessage("§c未找到扫描会话 #" + sessionId);
+                return true;
+            }
+            if (!"STOPPED".equals(status) && !"COMPLETED".equals(status) && !"PAUSED".equals(status)) {
+                sender.sendMessage("§c扫描会话 #" + sessionId + " 当前状态为 " + status + "，无法重新开始。");
+                return true;
+            }
+            if (scanService.isSessionRunning(sessionId)) {
+                sender.sendMessage("§c扫描会话 #" + sessionId + " 正在运行中，请先暂停或停止。");
+                return true;
+            }
+            scanService.restartScan(sessionId);
+            sender.sendMessage("§a扫描会话 #" + sessionId + " 已重新开始。");
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c无效的会话ID。");
+        }
         return true;
     }
 

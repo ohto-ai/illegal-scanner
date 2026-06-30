@@ -19,10 +19,10 @@ public class ISTabCompleter implements TabCompleter {
             "whitelist", "give", "reload", "status"
     );
 
-    private static final List<String> SCAN_SUB = List.of("chunk", "player", "area", "res", "world", "full");
+    private static final List<String> SCAN_SUB = List.of("chunk", "player", "area", "res", "world", "full", "pause", "resume", "stop", "restart");
     private static final List<String> CHECK_SUB = List.of("item", "player", "chunk");
-    private static final List<String> VIEW_SUB = List.of("chunk", "player", "area", "world", "scan", "record", "item");
-    private static final List<String> REPORT_SUB = List.of("chunk", "player", "area", "world", "scan", "record", "item");
+    private static final List<String> VIEW_SUB = List.of("chunk", "player", "area", "res", "world", "full", "scan", "record", "item");
+    private static final List<String> REPORT_SUB = List.of("chunk", "player", "area", "res", "world", "scan", "record", "item");
     private static final List<String> HISTORY_SUB = List.of("chunk", "player");
     private static final List<String> MONITOR_SUB = List.of("enable", "disable", "status");
     private static final List<String> CONFIG_SUB = List.of("reload", "list", "rules", "monitor", "scan");
@@ -76,8 +76,36 @@ public class ISTabCompleter implements TabCompleter {
     private List<String> completeScan(String[] args) {
         String sub = args[1].toLowerCase();
         String partial = args.length >= 3 ? args[args.length - 1].toLowerCase() : "";
-        if (sub.equals("player") && args.length == 3) return onlinePlayerNames(partial);
-        if ((sub.equals("world") || sub.equals("full")) && args.length == 3) return worldNames(partial);
+
+        if (sub.equals("player")) {
+            if (args.length == 3) {
+                // Suggest flags AND online player names
+                List<String> suggestions = new java.util.ArrayList<>();
+                suggestions.add("-online");
+                suggestions.add("-offline");
+                suggestions.add("-all");
+                suggestions.addAll(onlinePlayerNames(partial));
+                return suggestions.stream().filter(s -> s.toLowerCase().startsWith(partial)).toList();
+            }
+            if (args.length == 4) {
+                // After a flag or player name — suggest player names
+                return onlinePlayerNames(partial);
+            }
+        }
+        if (sub.equals("world")) {
+            if (args.length == 3) {
+                // Suggest mode flags AND world names
+                List<String> suggestions = new java.util.ArrayList<>();
+                suggestions.add("-loaded");
+                suggestions.add("-unloaded");
+                suggestions.add("-all");
+                suggestions.addAll(worldNames(partial));
+                return suggestions.stream().filter(s -> s.toLowerCase().startsWith(partial)).toList();
+            }
+            if (args.length == 4) {
+                return worldNames(partial);
+            }
+        }
         return List.of();
     }
 

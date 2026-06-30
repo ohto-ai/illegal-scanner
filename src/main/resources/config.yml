@@ -10,15 +10,10 @@ database:
 # Scan Settings
 # ----------------------------------------------------------------------------
 scan:
-  # One-time full scan (manually started, runs once to establish baseline)
-  full_scan_enabled: false          # Default OFF — use /is scan full to start manually
-  full_scan_delay_ticks: 1200       # Delay after startup before restoring state (1 min)
-  full_scan_chunks_per_tick: 1      # Chunks per tick during full scan (keep low!)
-  full_scan_player_data: true       # Also scan offline player .dat files
-  full_scan_max_age_hours: 168      # Resume window: re-scan chunks older than this (1 week)
-  full_scan_restore_countdown_seconds: 30  # Auto-resume countdown when RUNNING at restart
+  scan_chunks_per_tick: 5           # Chunks processed per tick during scans (increase for faster scans, lower if TPS drops)
+  scan_dedup_enabled: true          # Skip chunks already scanned by a newer concurrent command
 
-  # Periodic loaded-chunk scanner (safety net, runs after full scan complete)
+  # Periodic loaded-chunk scanner (safety net)
   periodic_scan_enabled: true
   periodic_scan_interval_seconds: 300   # Scan all loaded chunks every N seconds (5 min)
   periodic_scan_initial_delay_ticks: 1200  # Delay before first periodic scan (1 min)

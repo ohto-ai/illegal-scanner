@@ -14,7 +14,9 @@ import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 
@@ -28,12 +30,21 @@ public class ScanService {
     private final ChunkScanner chunkScanner;
     private final PlayerScanner playerScanner;
     private final ScanSessionManager sessionManager;
+    private final ChunkScanDedupCache dedupCache;
 
-    public ScanService(IllegalScanner plugin) {
+    // Active scan tasks, keyed by session ID
+    private final Map<Integer, org.bukkit.scheduler.BukkitTask> activeTasks = new ConcurrentHashMap<>();
+    // Current scan indices, keyed by session ID (for pause/resume)
+    private final Map<Integer, AtomicInteger> scanIndices = new ConcurrentHashMap<>();
+    // Paused scan state, keyed by session ID (for resume)
+    private final Map<Integer, PausedScan> pausedScans = new ConcurrentHashMap<>();
+
+    public ScanService(IllegalScanner plugin, ChunkScanDedupCache dedupCache) {
         this.plugin = plugin;
         this.chunkScanner = new ChunkScanner(plugin);
         this.playerScanner = new PlayerScanner(plugin, chunkScanner);
         this.sessionManager = new ScanSessionManager(plugin);
+        this.dedupCache = dedupCache;
     }
 
     public ChunkScanner getChunkScanner() { return chunkScanner; }
@@ -41,35 +52,86 @@ public class ScanService {
 
     // ==================== Chunk Scan ====================
 
-    public int scanChunk(World world, int chunkX, int chunkZ) {
+    public int scanChunk(World world, int chunkX, int chunkZ, long commandTime) {
+        // Dedup: skip if this chunk was already scanned by a newer command
+        if (dedupCache.shouldSkip(world.getName(), chunkX, chunkZ, commandTime)) {
+            plugin.getLogger().fine("Skipping chunk " + world.getName() + " " + chunkX + "," + chunkZ
+                    + " — already scanned by a newer command");
+            return 0;
+        }
         Chunk chunk = world.getChunkAt(chunkX, chunkZ);
         if (!chunk.isLoaded()) {
             plugin.getLogger().warning("Chunk not loaded: " + world.getName() + " " + chunkX + "," + chunkZ);
             return 0;
         }
-        return scanChunkInternal(chunk, "chunk", 0);
+        int result = scanChunkInternal(chunk, "chunk", 0);
+        dedupCache.markScanned(world.getName(), chunkX, chunkZ, System.currentTimeMillis());
+        return result;
     }
 
     /**
      * Scan a chunk and record results under a session.
+     * Cleans old monitor records for this chunk before scanning — scan is authoritative.
      * @return number of items flagged
      */
     private int scanChunkInternal(Chunk chunk, String scanType, int sessionId) {
-        return chunkScanner.scanChunk(chunk, (item, slot, container, loc, violations, severity) -> {
+        String worldName = chunk.getWorld().getName();
+        int cx = chunk.getX();
+        int cz = chunk.getZ();
+
+        // Clean old monitor records — scan replaces all previous monitor state for this chunk
+        plugin.getDatabaseManager().deleteMonitorRecordsByChunk(worldName, cx, cz);
+
+        // Snapshot old scan item hashes before scanning.
+        // After scan, any old hash not found in current violations gets a CLEAN marker
+        // so the View correctly hides items that are no longer present.
+        java.util.Set<String> oldScanHashes = plugin.getDatabaseManager()
+                .getScanItemHashesByChunk(worldName, cx, cz);
+        java.util.Set<String> currentViolationHashes = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+        int flagged = chunkScanner.scanChunk(chunk, (item, slot, container, loc, violations, severity) -> {
+            String itemHash = plugin.getItemHashService().resolve(item);
+            if (itemHash != null) {
+                currentViolationHashes.add(itemHash);
+            }
             recordViolation(item, slot, container, loc, violations, severity,
                     scanType, sessionId, null, null);
         });
+
+        // Write CLEAN markers for old items no longer present in this scan
+        if (!oldScanHashes.isEmpty()) {
+            long now = System.currentTimeMillis();
+            Integer sid = sessionId > 0 ? sessionId : null;
+            for (String oldHash : oldScanHashes) {
+                if (!currentViolationHashes.contains(oldHash)) {
+                    // Use "CONTAINER" as non-null placeholder so the record passes
+                    // the SQL filter: container NOT IN ('inventory','armor','offhand','enderchest')
+                    ScanRecord cleanRecord = new ScanRecord(
+                            0, sid, oldHash, scanType,
+                            worldName, cx, cz,
+                            null, null, null, "CONTAINER", null,
+                            "[]", "CLEAN", now);
+                    plugin.getDatabaseManager().insertScanRecord(cleanRecord);
+                }
+            }
+        }
+
+        return flagged;
     }
 
     // ==================== Player Scan ====================
 
     public int scanPlayer(String playerName) {
-        Player onlinePlayer = Bukkit.getPlayer(playerName);
-        if (onlinePlayer != null && onlinePlayer.isOnline()) {
+        // Exact match only (no prefix matching)
+        Player onlinePlayer = resolveExactPlayer(playerName);
+        if (onlinePlayer != null) {
             return scanOnlinePlayer(onlinePlayer, "player", 0);
         }
         org.bukkit.OfflinePlayer offline = Bukkit.getOfflinePlayer(playerName);
-        if (offline.hasPlayedBefore()) {
+        if (offline.getName() != null && offline.getName().equalsIgnoreCase(playerName)
+                && offline.hasPlayedBefore()) {
+            // Clean old monitor records — scan replaces all previous monitor state for this player
+            plugin.getDatabaseManager().deleteMonitorRecordsByPlayer(offline.getUniqueId().toString());
             return playerScanner.scanOfflinePlayer(offline, (item, slot, container, loc, violations, severity) -> {
                 recordViolation(item, slot, container, loc, violations, severity,
                         "player", 0, offline.getUniqueId().toString(), offline.getName());
@@ -80,13 +142,134 @@ public class ScanService {
     }
 
     public int scanOnlinePlayer(Player player, String scanType, int sessionId) {
+        // Clean old monitor records — scan replaces all previous monitor state for this player
+        plugin.getDatabaseManager().deleteMonitorRecordsByPlayer(player.getUniqueId().toString());
+
         return playerScanner.scanOnlinePlayer(player, (item, slot, container, loc, violations, severity) -> {
             recordViolation(item, slot, container, loc, violations, severity,
                     scanType, sessionId, player.getUniqueId().toString(), player.getName());
         });
     }
 
-    // ==================== Area / Res / World / Full ====================
+    /**
+     * Scan a specific online player by name. Only scans if the player is online.
+     * @return number of flagged items, or -1 if player is not online
+     */
+    public int scanOnlinePlayerByName(String playerName) {
+        Player p = resolveExactPlayer(playerName);
+        if (p == null) return -1;
+        return scanOnlinePlayer(p, "player", 0);
+    }
+
+    /**
+     * Scan a specific offline player by name. Only scans if NOT online.
+     * @return number of flagged items, or -1 if no data found
+     */
+    public int scanOfflinePlayerByName(String playerName) {
+        // Don't scan if the player is currently online
+        Player online = Bukkit.getPlayer(playerName);
+        if (online != null && online.isOnline()) return -1;
+
+        org.bukkit.OfflinePlayer offline = Bukkit.getOfflinePlayer(playerName);
+        if (!offline.hasPlayedBefore()) return -1;
+
+        // Clean old monitor records — scan replaces all previous monitor state for this player
+        plugin.getDatabaseManager().deleteMonitorRecordsByPlayer(offline.getUniqueId().toString());
+        return playerScanner.scanOfflinePlayer(offline, (item, slot, container, loc, violations, severity) -> {
+            recordViolation(item, slot, container, loc, violations, severity,
+                    "player", 0, offline.getUniqueId().toString(), offline.getName());
+        });
+    }
+
+    /**
+     * Scan all online players in a session.
+     */
+    public CompletableFuture<Integer> scanAllOnlinePlayers() {
+        int onlineCount = plugin.getServer().getOnlinePlayers().size();
+        return sessionManager.createSession("player", "all online", onlineCount).thenCompose(sessionId -> {
+            CompletableFuture<Integer> future = new CompletableFuture<>();
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                int flagged = 0;
+                // Iterate players manually so we can capture UUID/name in the callback closure
+                for (Player player : plugin.getServer().getOnlinePlayers()) {
+                    try {
+                        final String puid = player.getUniqueId().toString();
+                        final String pname = player.getName();
+                        flagged += playerScanner.scanOnlinePlayer(player,
+                            (item, slot, container, loc, violations, severity) -> {
+                                recordViolation(item, slot, container, loc, violations, severity,
+                                        "player", sessionId, puid, pname);
+                            });
+                    } catch (Exception e) {
+                        plugin.getLogger().log(Level.WARNING,
+                                "Error scanning player " + player.getName(), e);
+                    }
+                }
+                sessionManager.completeSession(sessionId, onlineCount, flagged);
+                future.complete(flagged);
+            });
+            return future;
+        });
+    }
+
+    /**
+     * Scan all offline players (those with .dat files) in a session.
+     */
+    public CompletableFuture<Integer> scanAllOfflinePlayers() {
+        int estimated = estimateOfflinePlayerCount();
+        return sessionManager.createSession("player", "all offline", estimated).thenCompose(sessionId -> {
+            CompletableFuture<Integer> future = new CompletableFuture<>();
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                int flagged = 0;
+                java.util.Set<java.util.UUID> scanned = new java.util.HashSet<>();
+                for (World world : plugin.getServer().getWorlds()) {
+                    java.io.File playerDataFolder = new java.io.File(
+                            world.getWorldFolder(), "playerdata");
+                    if (!playerDataFolder.exists() || !playerDataFolder.isDirectory()) continue;
+                    java.io.File[] playerFiles = playerDataFolder.listFiles(
+                            (dir, name) -> name.endsWith(".dat"));
+                    if (playerFiles == null) continue;
+                    for (java.io.File file : playerFiles) {
+                        try {
+                            String uuidStr = file.getName().replace(".dat", "");
+                            java.util.UUID uuid = java.util.UUID.fromString(uuidStr);
+                            if (!scanned.add(uuid)) continue;
+                            org.bukkit.OfflinePlayer offline = plugin.getServer().getOfflinePlayer(uuid);
+                            final String puid = uuid.toString();
+                            final String pname = offline.getName() != null ? offline.getName() : uuidStr;
+                            // Clean old monitor records — scan replaces all previous monitor state
+                            plugin.getDatabaseManager().deleteMonitorRecordsByPlayer(puid);
+                            flagged += playerScanner.scanOfflinePlayer(offline,
+                                (item, slot, container, loc, violations, severity) -> {
+                                    recordViolation(item, slot, container, loc, violations, severity,
+                                            "player", sessionId, puid, pname);
+                                });
+                        } catch (Exception e) {
+                            plugin.getLogger().log(Level.WARNING,
+                                    "Error scanning offline player file: " + file.getName(), e);
+                        }
+                    }
+                }
+                sessionManager.completeSession(sessionId, estimated, flagged);
+                future.complete(flagged);
+            });
+            return future;
+        });
+    }
+
+    private int estimateOfflinePlayerCount() {
+        int count = 0;
+        for (World world : plugin.getServer().getWorlds()) {
+            java.io.File playerDataFolder = new java.io.File(world.getWorldFolder(), "playerdata");
+            if (playerDataFolder.exists()) {
+                java.io.File[] files = playerDataFolder.listFiles((d, n) -> n.endsWith(".dat"));
+                if (files != null) count = Math.max(count, files.length);
+            }
+        }
+        return count;
+    }
+
+    // ==================== Area / Res / World ====================
 
     /**
      * Scan a rectangular area by decomposing it into chunks (runs on main thread).
@@ -111,11 +294,12 @@ public class ScanService {
             }
         }
 
+        long commandTime = System.currentTimeMillis();
         String target = worldName + " " + x1 + "," + z1 + " ~ " + x2 + "," + z2;
         plugin.getLogger().info("Area scan: " + chunks.size() + " chunks in " + target);
 
         return sessionManager.createSession("area", target, chunks.size()).thenCompose(sessionId ->
-            processSyncBatch(world, chunks, sessionId, "area"));
+            processSyncBatch(world, chunks, sessionId, "area", commandTime));
     }
 
     /**
@@ -150,107 +334,74 @@ public class ScanService {
     }
 
     /**
-     * Scan an entire world by enumerating region files and decomposing to chunks (sync-safe).
+     * Scan a world with the given mode.
+     *
+     * @param worldName the world to scan
+     * @param mode      "loaded" (only loaded chunks), "unloaded" (only region-file chunks not loaded),
+     *                  or "all" (both, default)
      */
-    public CompletableFuture<Integer> scanWorld(String worldName) {
+    public CompletableFuture<Integer> scanWorld(String worldName, String mode) {
         World world = plugin.getServer().getWorld(worldName);
         if (world == null) {
             plugin.getLogger().warning("World not found: " + worldName);
             return CompletableFuture.completedFuture(0);
         }
 
-        plugin.getLogger().info("World scan started: " + worldName);
+        String effectiveMode = (mode == null || mode.isEmpty()) ? "all" : mode;
+        plugin.getLogger().info("World scan started: " + worldName + " (mode=" + effectiveMode + ")");
 
-        // Build chunk list from region files (can enumerate on any thread)
-        List<long[]> chunks = new ArrayList<>();
-        // Add loaded chunks
-        for (Chunk chunk : world.getLoadedChunks()) {
-            chunks.add(new long[]{chunk.getX(), chunk.getZ()});
-        }
-        // Enumerate from region files
-        java.io.File regionFolder = new java.io.File(world.getWorldFolder(), "region");
-        java.io.File[] regionFiles = regionFolder.listFiles((d, n) -> n.endsWith(".mca"));
-        if (regionFiles != null) {
-            java.util.Set<Long> loadedKeys = new java.util.HashSet<>();
-            for (Chunk c : world.getLoadedChunks()) {
-                loadedKeys.add(((long) c.getX()) << 32 | (c.getZ() & 0xFFFFFFFFL));
-            }
-            for (java.io.File rf : regionFiles) {
-                String[] parts = rf.getName().split("\\.");
-                if (parts.length != 4) continue;
-                try {
-                    int rx = Integer.parseInt(parts[1]);
-                    int rz = Integer.parseInt(parts[2]);
-                    for (int dx = 0; dx < 32; dx++) {
-                        for (int dz = 0; dz < 32; dz++) {
-                            int cx = rx * 32 + dx;
-                            int cz = rz * 32 + dz;
-                            long key = ((long) cx) << 32 | (cz & 0xFFFFFFFFL);
-                            if (!loadedKeys.contains(key)) {
-                                chunks.add(new long[]{cx, cz});
-                            }
-                        }
-                    }
-                } catch (NumberFormatException ignored) {}
-            }
-        }
+        long commandTime = System.currentTimeMillis();
+        List<long[]> chunks = buildWorldChunkList(world, effectiveMode);
 
         plugin.getLogger().info("World scan queue: " + chunks.size() + " chunks for " + worldName);
         return sessionManager.createSession("world", worldName, chunks.size()).thenCompose(sessionId ->
-            processSyncBatch(world, chunks, sessionId, "world"));
+            processSyncBatch(world, chunks, sessionId, "world", commandTime));
     }
 
     /**
-     * Full scan — scan all worlds sequentially.
+     * Build a chunk coordinate list for a world based on scan mode.
      */
-    public CompletableFuture<Integer> scanFull() {
-        plugin.getLogger().info("Full scan started...");
-        return sessionManager.createSession("full", "all worlds", plugin.getServer().getWorlds().size()).thenCompose(sessionId ->
-            scanAllWorldsRecursive(plugin.getServer().getWorlds(), 0, sessionId, 0));
-    }
-
-    private CompletableFuture<Integer> scanAllWorldsRecursive(
-            List<World> worlds, int index, int sessionId, int totalFlagged) {
-        if (index >= worlds.size()) {
-            sessionManager.completeSession(sessionId, worlds.size(), totalFlagged);
-            plugin.getLogger().info("Full scan complete: " + totalFlagged + " violations across all worlds");
-            return CompletableFuture.completedFuture(totalFlagged);
-        }
-        World world = worlds.get(index);
-        // Build chunk list for this world
+    private List<long[]> buildWorldChunkList(World world, String mode) {
         List<long[]> chunks = new ArrayList<>();
-        for (Chunk chunk : world.getLoadedChunks()) {
-            chunks.add(new long[]{chunk.getX(), chunk.getZ()});
-        }
-        java.io.File regionFolder = new java.io.File(world.getWorldFolder(), "region");
-        java.io.File[] regionFiles = regionFolder.listFiles((d, n) -> n.endsWith(".mca"));
-        if (regionFiles != null) {
-            java.util.Set<Long> loadedKeys = new java.util.HashSet<>();
-            for (Chunk c : world.getLoadedChunks()) {
-                loadedKeys.add(((long) c.getX()) << 32 | (c.getZ() & 0xFFFFFFFFL));
+        boolean includeLoaded = mode.equals("loaded") || mode.equals("all");
+        boolean includeUnloaded = mode.equals("unloaded") || mode.equals("all");
+
+        if (includeLoaded) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                chunks.add(new long[]{chunk.getX(), chunk.getZ()});
             }
-            for (java.io.File rf : regionFiles) {
-                String[] parts = rf.getName().split("\\.");
-                if (parts.length != 4) continue;
-                try {
-                    int rx = Integer.parseInt(parts[1]);
-                    int rz = Integer.parseInt(parts[2]);
-                    for (int dx = 0; dx < 32; dx++) {
-                        for (int dz = 0; dz < 32; dz++) {
-                            int cx = rx * 32 + dx;
-                            int cz = rz * 32 + dz;
-                            long key = ((long) cx) << 32 | (cz & 0xFFFFFFFFL);
-                            if (!loadedKeys.contains(key)) {
-                                chunks.add(new long[]{cx, cz});
+        }
+
+        if (includeUnloaded) {
+            java.io.File regionFolder = new java.io.File(world.getWorldFolder(), "region");
+            java.io.File[] regionFiles = regionFolder.listFiles((d, n) -> n.endsWith(".mca"));
+            if (regionFiles != null) {
+                java.util.Set<Long> loadedKeys = new java.util.HashSet<>();
+                for (Chunk c : world.getLoadedChunks()) {
+                    loadedKeys.add(((long) c.getX()) << 32 | (c.getZ() & 0xFFFFFFFFL));
+                }
+                for (java.io.File rf : regionFiles) {
+                    String[] parts = rf.getName().split("\\.");
+                    if (parts.length != 4) continue;
+                    try {
+                        int rx = Integer.parseInt(parts[1]);
+                        int rz = Integer.parseInt(parts[2]);
+                        for (int dx = 0; dx < 32; dx++) {
+                            for (int dz = 0; dz < 32; dz++) {
+                                int cx = rx * 32 + dx;
+                                int cz = rz * 32 + dz;
+                                long key = ((long) cx) << 32 | (cz & 0xFFFFFFFFL);
+                                if (!loadedKeys.contains(key)) {
+                                    chunks.add(new long[]{cx, cz});
+                                }
                             }
                         }
-                    }
-                } catch (NumberFormatException ignored) {}
+                    } catch (NumberFormatException ignored) {}
+                }
             }
         }
-        plugin.getLogger().info("Full scan: world " + world.getName() + " — " + chunks.size() + " chunks");
-        return processSyncBatch(world, chunks, sessionId, "full")
-                .thenCompose(flagged -> scanAllWorldsRecursive(worlds, index + 1, sessionId, totalFlagged + flagged));
+
+        return chunks;
     }
 
     // ==================== Core Recording ====================
@@ -320,53 +471,710 @@ public class ScanService {
      * and completes the future when done.
      */
     private CompletableFuture<Integer> processSyncBatch(World world, List<long[]> chunks,
-                                                         int sessionId, String scanType) {
+                                                         int sessionId, String scanType,
+                                                         long commandTime) {
         CompletableFuture<Integer> future = new CompletableFuture<>();
         AtomicInteger flagged = new AtomicInteger(0);
         AtomicInteger scanned = new AtomicInteger(0);
+        AtomicInteger skipped = new AtomicInteger(0);
         AtomicInteger index = new AtomicInteger(0);
 
         int chunksPerTick = plugin.getConfigManager().getConfig()
-                .getInt("scan.full_scan_chunks_per_tick", 1);
+                .getInt("scan.scan_chunks_per_tick", 1);
+
+        final String worldName = world.getName();
+
+        // Pending retry queue for chunks that are being async-loaded
+        List<long[]> pendingChunks = new ArrayList<>();
+
+        // Store state for pause/resume
+        scanIndices.put(sessionId, index);
+        pausedScans.put(sessionId, new PausedScan(world, null, chunks, 0,
+                scanned, flagged, skipped, scanType, commandTime, pendingChunks, false));
 
         org.bukkit.scheduler.BukkitTask[] taskHolder = new org.bukkit.scheduler.BukkitTask[1];
+        int[] tickCount = new int[1]; // throttle progress updates to every 20 ticks (1 sec)
         taskHolder[0] = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
-            int processed = 0;
-            while (processed < chunksPerTick && index.get() < chunks.size()) {
-                int i = index.getAndIncrement();
-                long[] coords = chunks.get(i);
-                int cx = (int) coords[0];
-                int cz = (int) coords[1];
-
-                try {
-                    Chunk chunk = world.getChunkAt(cx, cz);
-                    if (!chunk.isLoaded()) {
-                        chunk.load();
-                    }
-                    int f = scanChunkInternal(chunk, scanType, sessionId);
-                    flagged.addAndGet(f);
-                    scanned.incrementAndGet();
-                } catch (Exception e) {
-                    plugin.getLogger().fine("Chunk scan failed (" + cx + "," + cz + "): " + e.getMessage());
-                    scanned.incrementAndGet();
-                }
-                processed++;
+            if (!activeTasks.containsKey(sessionId)) {
+                // Scan was stopped externally
+                taskHolder[0].cancel();
+                scanIndices.remove(sessionId);
+                if (!future.isDone()) future.complete(flagged.get());
+                return;
             }
 
-            if (index.get() >= chunks.size()) {
-                // All done
+            int processed = 0;
+            boolean mainPassDone = index.get() >= chunks.size();
+
+            if (!mainPassDone) {
+                // ---- Phase 1: scan loaded chunks fast, queue unloaded for async load ----
+                while (processed < chunksPerTick && index.get() < chunks.size()) {
+                    int i = index.getAndIncrement();
+                    long[] coords = chunks.get(i);
+                    int cx = (int) coords[0];
+                    int cz = (int) coords[1];
+
+                    if (dedupCache.shouldSkip(worldName, cx, cz, commandTime)) {
+                        skipped.incrementAndGet();
+                        scanned.incrementAndGet();
+                        processed++;
+                        continue;
+                    }
+
+                    try {
+                        Chunk chunk = world.getChunkAt(cx, cz);
+                        if (!chunk.isLoaded()) {
+                            chunk.load(); // async, non-blocking — will be retried in Phase 2
+                            pendingChunks.add(new long[]{cx, cz});
+                            continue; // don't count as processed
+                        }
+                        int f = scanChunkInternal(chunk, scanType, sessionId);
+                        flagged.addAndGet(f);
+                        dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
+                        scanned.incrementAndGet();
+                    } catch (Exception e) {
+                        plugin.getLogger().fine("Chunk scan failed (" + cx + "," + cz + "): " + e.getMessage());
+                        scanned.incrementAndGet();
+                    }
+                    processed++;
+                }
+            } else {
+                // ---- Phase 2: drain pending queue, force-load stubborn chunks ----
+                int retryIdx = 0;
+                while (processed < chunksPerTick && retryIdx < pendingChunks.size()) {
+                    long[] coords = pendingChunks.get(retryIdx);
+                    int cx = (int) coords[0];
+                    int cz = (int) coords[1];
+
+                    try {
+                        Chunk chunk = world.getChunkAt(cx, cz);
+                        if (!chunk.isLoaded()) {
+                            chunk.load(true); // fallback sync load
+                        }
+                        if (chunk.isLoaded()) {
+                            int f = scanChunkInternal(chunk, scanType, sessionId);
+                            flagged.addAndGet(f);
+                            dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
+                            pendingChunks.remove(retryIdx);
+                        } else {
+                            pendingChunks.remove(retryIdx);
+                            scanned.incrementAndGet();
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().fine("Retry chunk scan failed (" + cx + "," + cz + "): " + e.getMessage());
+                        pendingChunks.remove(retryIdx);
+                        scanned.incrementAndGet();
+                    }
+                    processed++;
+                }
+            }
+
+            // Update progress in DB every 20 ticks (1 second) to reduce DB pressure
+            if (++tickCount[0] % 20 == 0) {
+                sessionManager.updateProgress(sessionId, scanned.get(), flagged.get());
+            }
+
+            if (index.get() >= chunks.size() && pendingChunks.isEmpty()) {
+                // All done — flush final progress
+                sessionManager.updateProgress(sessionId, scanned.get(), flagged.get());
                 taskHolder[0].cancel();
+                activeTasks.remove(sessionId);
+                scanIndices.remove(sessionId);
+                pausedScans.remove(sessionId);
                 sessionManager.completeSession(sessionId, scanned.get(), flagged.get());
+                String dedupMsg = skipped.get() > 0 ? " (" + skipped.get() + " skipped — already scanned)" : "";
                 plugin.getLogger().info(scanType + " scan complete: " + scanned.get()
-                        + " chunks, " + flagged.get() + " violations");
+                        + " chunks, " + flagged.get() + " violations" + dedupMsg);
                 future.complete(flagged.get());
             }
         }, 1L, 1L); // every tick
 
+        activeTasks.put(sessionId, taskHolder[0]);
         return future;
     }
 
+    /**
+     * Scan all worlds (loaded chunks only for performance).
+     */
+    public CompletableFuture<Integer> scanFull() {
+        List<World> worlds = plugin.getServer().getWorlds();
+        if (worlds.isEmpty()) return CompletableFuture.completedFuture(0);
+
+        // Build chunk list across all worlds
+        List<long[]> allChunks = new ArrayList<>();
+        for (World world : worlds) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                // Encode world index + chunk coords: worldIndex in high 32 bits, cx/cz in lower
+                int worldIdx = worlds.indexOf(world);
+                allChunks.add(new long[]{worldIdx, chunk.getX(), chunk.getZ()});
+            }
+        }
+
+        if (allChunks.isEmpty()) return CompletableFuture.completedFuture(0);
+
+        long commandTime = System.currentTimeMillis();
+        String target = allChunks.size() + " chunks across " + worlds.size() + " worlds";
+        plugin.getLogger().info("Full scan: " + target);
+
+        return sessionManager.createSession("full", target, allChunks.size()).thenCompose(sessionId -> {
+            CompletableFuture<Integer> future = new CompletableFuture<>();
+            AtomicInteger flagged = new AtomicInteger(0);
+            AtomicInteger scanned = new AtomicInteger(0);
+            AtomicInteger skipped = new AtomicInteger(0);
+            AtomicInteger index = new AtomicInteger(0);
+
+            int chunksPerTick = plugin.getConfigManager().getConfig()
+                    .getInt("scan.scan_chunks_per_tick", 1);
+
+            // Store state for pause/resume
+            scanIndices.put(sessionId, index);
+            List<World> worldsCopy = new ArrayList<>(worlds); // capture for pause state
+            List<long[]> fullPendingChunks = new ArrayList<>();
+            pausedScans.put(sessionId, new PausedScan(null, worldsCopy, allChunks, 0,
+                    scanned, flagged, skipped, "full", commandTime, fullPendingChunks, false));
+
+            org.bukkit.scheduler.BukkitTask[] taskHolder = new org.bukkit.scheduler.BukkitTask[1];
+            int[] tickCount = new int[1]; // throttle progress updates
+            taskHolder[0] = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+                if (!activeTasks.containsKey(sessionId)) {
+                    // Scan was stopped externally
+                    taskHolder[0].cancel();
+                    scanIndices.remove(sessionId);
+                    if (!future.isDone()) future.complete(flagged.get());
+                    return;
+                }
+
+                int processed = 0;
+                boolean mainPassDone = index.get() >= allChunks.size();
+
+                if (!mainPassDone) {
+                    // ---- Phase 1: scan loaded chunks fast, queue unloaded for async load ----
+                    while (processed < chunksPerTick && index.get() < allChunks.size()) {
+                        int i = index.getAndIncrement();
+                        long[] tuple = allChunks.get(i);
+                        int worldIdx = (int) tuple[0];
+                        int cx = (int) tuple[1];
+                        int cz = (int) tuple[2];
+
+                        try {
+                            World world = worlds.get(worldIdx);
+                            String wName = world.getName();
+
+                            if (dedupCache.shouldSkip(wName, cx, cz, commandTime)) {
+                                skipped.incrementAndGet();
+                                scanned.incrementAndGet();
+                                processed++;
+                                continue;
+                            }
+
+                            Chunk chunk = world.getChunkAt(cx, cz);
+                            if (!chunk.isLoaded()) {
+                                chunk.load(); // async, non-blocking
+                                fullPendingChunks.add(new long[]{worldIdx, cx, cz});
+                                continue; // don't count as processed
+                            }
+                            int f = scanChunkInternal(chunk, "full", sessionId);
+                            flagged.addAndGet(f);
+                            dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
+                        } catch (Exception e) {
+                            plugin.getLogger().fine("Full scan chunk failed: " + e.getMessage());
+                        }
+                        scanned.incrementAndGet();
+                        processed++;
+                    }
+                } else {
+                    // ---- Phase 2: drain pending queue, force-load stubborn chunks ----
+                    int retryIdx = 0;
+                    while (processed < chunksPerTick && retryIdx < fullPendingChunks.size()) {
+                        long[] tuple = fullPendingChunks.get(retryIdx);
+                        int worldIdx = (int) tuple[0];
+                        int cx = (int) tuple[1];
+                        int cz = (int) tuple[2];
+
+                        try {
+                            World world = worlds.get(worldIdx);
+                            String wName = world.getName();
+
+                            Chunk chunk = world.getChunkAt(cx, cz);
+                            if (!chunk.isLoaded()) {
+                                chunk.load(true); // fallback sync load
+                            }
+                            if (chunk.isLoaded()) {
+                                int f = scanChunkInternal(chunk, "full", sessionId);
+                                flagged.addAndGet(f);
+                                dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
+                                fullPendingChunks.remove(retryIdx);
+                            } else {
+                                fullPendingChunks.remove(retryIdx);
+                                scanned.incrementAndGet();
+                            }
+                        } catch (Exception e) {
+                            plugin.getLogger().fine("Full scan retry failed: " + e.getMessage());
+                            fullPendingChunks.remove(retryIdx);
+                            scanned.incrementAndGet();
+                        }
+                        processed++;
+                    }
+                }
+
+                // Update progress in DB every 20 ticks (1 second) to reduce DB pressure
+                if (++tickCount[0] % 20 == 0) {
+                    sessionManager.updateProgress(sessionId, scanned.get(), flagged.get());
+                }
+
+                if (index.get() >= allChunks.size() && fullPendingChunks.isEmpty()) {
+                    // Flush final progress
+                    sessionManager.updateProgress(sessionId, scanned.get(), flagged.get());
+                    taskHolder[0].cancel();
+                    activeTasks.remove(sessionId);
+                    scanIndices.remove(sessionId);
+                    pausedScans.remove(sessionId);
+                    sessionManager.completeSession(sessionId, scanned.get(), flagged.get());
+                    String dedupMsg = skipped.get() > 0 ? " (" + skipped.get() + " skipped — already scanned)" : "";
+                    plugin.getLogger().info("Full scan complete: " + scanned.get()
+                            + " chunks, " + flagged.get() + " violations" + dedupMsg);
+                    future.complete(flagged.get());
+                }
+            }, 1L, 1L);
+
+            activeTasks.put(sessionId, taskHolder[0]);
+            return future;
+        });
+    }
+
+    /** Resolve a player by exact name (case-insensitive). Unlike Bukkit.getPlayer() this does NOT do prefix matching. */
+    private Player resolveExactPlayer(String name) {
+        Player exact = Bukkit.getPlayerExact(name);
+        if (exact != null) return exact;
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            if (online.getName().equalsIgnoreCase(name)) return online;
+        }
+        return null;
+    }
+
+    // ==================== Scan Control (Pause / Resume / Stop / Restart) ====================
+
+    /**
+     * Holds the state needed to resume a paused chunk-based scan.
+     */
+    private static class PausedScan {
+        final World world;          // for area/res/world scans (null for full scans)
+        final List<World> worlds;   // for full scans (null otherwise)
+        final List<long[]> chunks;  // remaining chunks to process
+        final int resumeIndex;
+        final AtomicInteger scanned;
+        final AtomicInteger flagged;
+        final AtomicInteger skipped;
+        final String scanType;
+        final long commandTime;
+        final List<long[]> pendingChunks;  // chunks waiting for async load retry
+        final boolean mainPassDone;        // true if main list exhausted (in retry phase)
+
+        PausedScan(World world, List<World> worlds, List<long[]> chunks, int resumeIndex,
+                   AtomicInteger scanned, AtomicInteger flagged, AtomicInteger skipped,
+                   String scanType, long commandTime,
+                   List<long[]> pendingChunks, boolean mainPassDone) {
+            this.world = world;
+            this.worlds = worlds;
+            this.chunks = chunks;
+            this.resumeIndex = resumeIndex;
+            this.scanned = scanned;
+            this.flagged = flagged;
+            this.skipped = skipped;
+            this.scanType = scanType;
+            this.commandTime = commandTime;
+            this.pendingChunks = pendingChunks;
+            this.mainPassDone = mainPassDone;
+        }
+    }
+
+    /**
+     * Pause a running scan session.
+     * @return future that completes when the DB status has been updated to PAUSED.
+     */
+    public CompletableFuture<Void> pauseScan(int sessionId) {
+        org.bukkit.scheduler.BukkitTask task = activeTasks.remove(sessionId);
+        if (task != null) {
+            // Save current progress
+            AtomicInteger index = scanIndices.remove(sessionId);
+            PausedScan paused = pausedScans.remove(sessionId); // get the state saved by processSyncBatch
+            if (paused != null && index != null) {
+                // Update the resume index to current position
+                boolean mainDone = index.get() >= paused.chunks.size();
+                PausedScan updated = new PausedScan(paused.world, paused.worlds, paused.chunks,
+                        index.get(), paused.scanned, paused.flagged, paused.skipped,
+                        paused.scanType, paused.commandTime,
+                        paused.pendingChunks, mainDone);
+                pausedScans.put(sessionId, updated);
+            }
+            task.cancel();
+            plugin.getLogger().info("Scan session " + sessionId + " paused at index " +
+                    (paused != null ? paused.resumeIndex : "?"));
+            return sessionManager.pauseSession(sessionId);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Resume a paused scan session.
+     * If the in-memory paused state was lost (e.g. server restart), the old session is
+     * stopped and a new scan is started with the same parameters.
+     * @return future that completes when the DB status has been updated and the scan has started.
+     */
+    public CompletableFuture<Void> resumeScan(int sessionId) {
+        PausedScan paused = pausedScans.remove(sessionId);
+        if (paused == null) {
+            // In-memory state lost — most likely from a server restart.
+            // Stop the old session (unrecoverable) and restart from original parameters.
+            plugin.getLogger().warning("No paused state found for session " + sessionId
+                    + " — in-memory state was lost (server restart?). "
+                    + "Stopping old session and restarting scan from scratch.");
+            // First stop the old session, then restart with same parameters on main thread
+            return sessionManager.stopSession(sessionId).thenRun(() -> {
+                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                    restartScan(sessionId);
+                });
+            });
+        }
+
+        // First update DB status to RUNNING, then start the scan on main thread
+        return sessionManager.resumeSession(sessionId).thenRun(() -> {
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                if (paused.worlds != null) {
+                    resumeFullScan(sessionId, paused);
+                } else {
+                    resumeChunkScan(sessionId, paused);
+                }
+                plugin.getLogger().info("Scan session " + sessionId + " resumed from index " + paused.resumeIndex);
+            });
+        });
+    }
+
+    /** Resume a standard chunk-based scan (area/res/world). */
+    private void resumeChunkScan(int sessionId, PausedScan paused) {
+        AtomicInteger index = new AtomicInteger(paused.resumeIndex);
+        scanIndices.put(sessionId, index);
+        pausedScans.put(sessionId, paused); // allow pause again
+
+        int chunksPerTick = plugin.getConfigManager().getConfig()
+                .getInt("scan.scan_chunks_per_tick", 1);
+        final String worldName = paused.world.getName();
+
+        org.bukkit.scheduler.BukkitTask[] taskHolder = new org.bukkit.scheduler.BukkitTask[1];
+        int[] tickCount = new int[1]; // throttle progress updates
+        taskHolder[0] = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            if (!activeTasks.containsKey(sessionId)) {
+                // Scan was stopped externally
+                taskHolder[0].cancel();
+                return;
+            }
+
+            int processed = 0;
+            boolean mainPassDone = paused.mainPassDone || index.get() >= paused.chunks.size();
+
+            if (!mainPassDone) {
+                // ---- Phase 1: scan loaded chunks fast, queue unloaded for async load ----
+                while (processed < chunksPerTick && index.get() < paused.chunks.size()) {
+                    int i = index.getAndIncrement();
+                    long[] coords = paused.chunks.get(i);
+                    int cx = (int) coords[0];
+                    int cz = (int) coords[1];
+
+                    if (dedupCache.shouldSkip(worldName, cx, cz, paused.commandTime)) {
+                        paused.skipped.incrementAndGet();
+                        paused.scanned.incrementAndGet();
+                        processed++;
+                        continue;
+                    }
+
+                    try {
+                        Chunk chunk = paused.world.getChunkAt(cx, cz);
+                        if (!chunk.isLoaded()) {
+                            chunk.load(); // async, non-blocking — will retry
+                            paused.pendingChunks.add(new long[]{cx, cz});
+                            continue; // don't count as processed
+                        }
+                        int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                        paused.flagged.addAndGet(f);
+                        dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
+                    } catch (Exception e) {
+                        plugin.getLogger().fine("Chunk scan failed (" + cx + "," + cz + "): " + e.getMessage());
+                    }
+                    paused.scanned.incrementAndGet();
+                    processed++;
+                }
+            } else {
+                // ---- Phase 2: drain pending queue, force-load stubborn chunks ----
+                int retryIdx = 0;
+                while (processed < chunksPerTick && retryIdx < paused.pendingChunks.size()) {
+                    long[] coords = paused.pendingChunks.get(retryIdx);
+                    int cx = (int) coords[0];
+                    int cz = (int) coords[1];
+
+                    try {
+                        Chunk chunk = paused.world.getChunkAt(cx, cz);
+                        if (!chunk.isLoaded()) {
+                            chunk.load(true); // fallback sync load
+                        }
+                        if (chunk.isLoaded()) {
+                            int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                            paused.flagged.addAndGet(f);
+                            dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
+                            paused.pendingChunks.remove(retryIdx);
+                        } else {
+                            paused.pendingChunks.remove(retryIdx);
+                            paused.scanned.incrementAndGet();
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().fine("Retry chunk scan failed (" + cx + "," + cz + "): " + e.getMessage());
+                        paused.pendingChunks.remove(retryIdx);
+                        paused.scanned.incrementAndGet();
+                    }
+                    processed++;
+                }
+            }
+
+            // Update progress in DB every 20 ticks (1 second)
+            if (++tickCount[0] % 20 == 0) {
+                sessionManager.updateProgress(sessionId, paused.scanned.get(), paused.flagged.get());
+            }
+
+            if (index.get() >= paused.chunks.size() && paused.pendingChunks.isEmpty()) {
+                // Flush final progress
+                sessionManager.updateProgress(sessionId, paused.scanned.get(), paused.flagged.get());
+                taskHolder[0].cancel();
+                activeTasks.remove(sessionId);
+                scanIndices.remove(sessionId);
+                sessionManager.completeSession(sessionId, paused.scanned.get(), paused.flagged.get());
+                String dedupMsg = paused.skipped.get() > 0 ? " (" + paused.skipped.get() + " skipped)" : "";
+                plugin.getLogger().info(paused.scanType + " scan complete: " + paused.scanned.get()
+                        + " chunks, " + paused.flagged.get() + " violations" + dedupMsg);
+            }
+        }, 1L, 1L);
+
+        activeTasks.put(sessionId, taskHolder[0]);
+    }
+
+    /** Resume a full scan from paused state. */
+    private void resumeFullScan(int sessionId, PausedScan paused) {
+        AtomicInteger index = new AtomicInteger(paused.resumeIndex);
+        scanIndices.put(sessionId, index);
+        pausedScans.put(sessionId, paused); // allow pause again
+
+        int chunksPerTick = plugin.getConfigManager().getConfig()
+                .getInt("scan.scan_chunks_per_tick", 1);
+
+        org.bukkit.scheduler.BukkitTask[] taskHolder = new org.bukkit.scheduler.BukkitTask[1];
+        int[] tickCount = new int[1]; // throttle progress updates
+        taskHolder[0] = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            if (!activeTasks.containsKey(sessionId)) {
+                taskHolder[0].cancel();
+                return;
+            }
+
+            int processed = 0;
+            boolean mainPassDone = paused.mainPassDone || index.get() >= paused.chunks.size();
+
+            if (!mainPassDone) {
+                // ---- Phase 1: scan loaded chunks fast, queue unloaded for async load ----
+                while (processed < chunksPerTick && index.get() < paused.chunks.size()) {
+                    int i = index.getAndIncrement();
+                    long[] tuple = paused.chunks.get(i);
+                    int worldIdx = (int) tuple[0];
+                    int cx = (int) tuple[1];
+                    int cz = (int) tuple[2];
+
+                    try {
+                        World world = paused.worlds.get(worldIdx);
+                        String wName = world.getName();
+
+                        if (dedupCache.shouldSkip(wName, cx, cz, paused.commandTime)) {
+                            paused.skipped.incrementAndGet();
+                            paused.scanned.incrementAndGet();
+                            processed++;
+                            continue;
+                        }
+
+                        Chunk chunk = world.getChunkAt(cx, cz);
+                        if (!chunk.isLoaded()) {
+                            chunk.load(); // async, non-blocking
+                            paused.pendingChunks.add(new long[]{worldIdx, cx, cz});
+                            continue; // don't count as processed
+                        }
+                        int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                        paused.flagged.addAndGet(f);
+                        dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
+                    } catch (Exception e) {
+                        plugin.getLogger().fine("Full scan chunk failed: " + e.getMessage());
+                    }
+                    paused.scanned.incrementAndGet();
+                    processed++;
+                }
+            } else {
+                // ---- Phase 2: drain pending queue, force-load stubborn chunks ----
+                int retryIdx = 0;
+                while (processed < chunksPerTick && retryIdx < paused.pendingChunks.size()) {
+                    long[] tuple = paused.pendingChunks.get(retryIdx);
+                    int worldIdx = (int) tuple[0];
+                    int cx = (int) tuple[1];
+                    int cz = (int) tuple[2];
+
+                    try {
+                        World world = paused.worlds.get(worldIdx);
+                        String wName = world.getName();
+
+                        Chunk chunk = world.getChunkAt(cx, cz);
+                        if (!chunk.isLoaded()) {
+                            chunk.load(true); // fallback sync load
+                        }
+                        if (chunk.isLoaded()) {
+                            int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                            paused.flagged.addAndGet(f);
+                            dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
+                            paused.pendingChunks.remove(retryIdx);
+                        } else {
+                            paused.pendingChunks.remove(retryIdx);
+                            paused.scanned.incrementAndGet();
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().fine("Full scan retry failed: " + e.getMessage());
+                        paused.pendingChunks.remove(retryIdx);
+                        paused.scanned.incrementAndGet();
+                    }
+                    processed++;
+                }
+            }
+
+            // Update progress in DB every 20 ticks (1 second)
+            if (++tickCount[0] % 20 == 0) {
+                sessionManager.updateProgress(sessionId, paused.scanned.get(), paused.flagged.get());
+            }
+
+            if (index.get() >= paused.chunks.size() && paused.pendingChunks.isEmpty()) {
+                // Flush final progress
+                sessionManager.updateProgress(sessionId, paused.scanned.get(), paused.flagged.get());
+                taskHolder[0].cancel();
+                activeTasks.remove(sessionId);
+                scanIndices.remove(sessionId);
+                sessionManager.completeSession(sessionId, paused.scanned.get(), paused.flagged.get());
+                String dedupMsg = paused.skipped.get() > 0 ? " (" + paused.skipped.get() + " skipped)" : "";
+                plugin.getLogger().info("Full scan complete: " + paused.scanned.get()
+                        + " chunks, " + paused.flagged.get() + " violations" + dedupMsg);
+            }
+        }, 1L, 1L);
+
+        activeTasks.put(sessionId, taskHolder[0]);
+    }
+
+    /**
+     * Stop a running or paused scan session.
+     * @return future that completes when the DB status has been updated to STOPPED.
+     */
+    public CompletableFuture<Void> stopScan(int sessionId) {
+        // Cancel any active task
+        org.bukkit.scheduler.BukkitTask task = activeTasks.remove(sessionId);
+        if (task != null) {
+            task.cancel();
+        }
+        scanIndices.remove(sessionId);
+        pausedScans.remove(sessionId);
+        plugin.getLogger().info("Scan session " + sessionId + " stopped.");
+        return sessionManager.stopSession(sessionId);
+    }
+
+    /**
+     * Restart a stopped scan session — re-initiates based on original session parameters.
+     */
+    public void restartScan(int sessionId) {
+        var session = sessionManager.getSession(sessionId);
+        if (session == null) {
+            plugin.getLogger().warning("Cannot restart: session " + sessionId + " not found.");
+            return;
+        }
+
+        plugin.getLogger().info("Restarting scan session " + sessionId + " (" + session.scanType() + ": " + session.target() + ")");
+
+        // Re-initiate based on scan type
+        switch (session.scanType()) {
+            case "area" -> restartAreaScan(session);
+            case "res" -> scanRes(session.target());
+            case "world" -> restartWorldScan(session);
+            case "full" -> scanFull();
+            case "player" -> restartPlayerScan(session);
+            default -> plugin.getLogger().warning("Cannot restart scan type: " + session.scanType());
+        }
+    }
+
+    /** Parse area scan target "world x1,z1 ~ x2,z2" and re-scan. */
+    private void restartAreaScan(DatabaseManager.ScanSession session) {
+        try {
+            String target = session.target();
+            String[] parts = target.split(" ");
+            if (parts.length < 2) return;
+            String worldName = parts[0];
+            // parts[1] = "x1,z1", parts[2] = "~", parts[3] = "x2,z2"
+            String[] coords1 = parts[1].split(",");
+            String[] coords2 = parts[3].split(",");
+            int x1 = Integer.parseInt(coords1[0]);
+            int z1 = Integer.parseInt(coords1[1]);
+            int x2 = Integer.parseInt(coords2[0]);
+            int z2 = Integer.parseInt(coords2[1]);
+            scanArea(worldName, x1, z1, x2, z2);
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to parse area target for restart: " + session.target());
+        }
+    }
+
+    /** Restart a world scan. */
+    private void restartWorldScan(DatabaseManager.ScanSession session) {
+        String target = session.target();
+        String mode = "all";
+        String worldName = target;
+        // Parse: target might be just world name or "worldName mode"
+        if (target.contains(" ")) {
+            String[] parts = target.split(" ");
+            worldName = parts[0];
+            mode = parts.length > 1 ? parts[1] : "all";
+        }
+        scanWorld(worldName, mode);
+    }
+
+    /** Restart a player scan. */
+    private void restartPlayerScan(DatabaseManager.ScanSession session) {
+        String target = session.target();
+        if ("all online".equals(target)) {
+            scanAllOnlinePlayers();
+        } else if ("all offline".equals(target)) {
+            scanAllOfflinePlayers();
+        } else {
+            // Single player scan
+            scanPlayer(target);
+        }
+    }
+
+    /**
+     * Check if a session is currently active (has a running task).
+     */
+    public boolean isSessionRunning(int sessionId) {
+        return activeTasks.containsKey(sessionId);
+    }
+
+    /**
+     * Get a session's current status from DB.
+     */
+    public String getSessionStatus(int sessionId) {
+        var session = sessionManager.getSession(sessionId);
+        return session != null ? session.status() : null;
+    }
+
     public void shutdown() {
+        // Cancel all active tasks
+        for (var entry : activeTasks.entrySet()) {
+            entry.getValue().cancel();
+        }
+        activeTasks.clear();
+        scanIndices.clear();
+        pausedScans.clear();
         plugin.getLogger().info("Scan service shut down.");
     }
 }

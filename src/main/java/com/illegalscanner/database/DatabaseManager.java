@@ -37,12 +37,7 @@ public class DatabaseManager {
         File parentDir = dbFile.getAbsoluteFile().getParentFile();
         if (!parentDir.exists()) parentDir.mkdirs();
 
-        // Delete old database to start fresh
-        if (dbFile.exists()) {
-            dbFile.delete();
-            plugin.getLogger().info("Old database deleted. Starting fresh.");
-        }
-
+        boolean isNew = !dbFile.exists();
         String url = "jdbc:sqlite:" + dbFile.getAbsolutePath();
         connection = DriverManager.getConnection(url);
 
@@ -54,7 +49,7 @@ public class DatabaseManager {
         }
 
         createTables();
-        plugin.getLogger().info("Database initialized: " + dbFile.getAbsolutePath());
+        plugin.getLogger().info("Database " + (isNew ? "created" : "opened") + ": " + dbFile.getAbsolutePath());
     }
 
     private void createTables() throws SQLException {
@@ -184,6 +179,15 @@ public class DatabaseManager {
                 )
             """);
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_player_whitelist_uuid ON player_whitelist(player_uuid)");
+
+            // --- World whitelist ---
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS world_whitelist (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    world_name  TEXT NOT NULL UNIQUE,
+                    created_at  INTEGER NOT NULL
+                )
+            """);
 
             // --- Indexes for scan_records ---
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_scan_chunk ON scan_records(world, chunk_x, chunk_z, scan_time DESC)");
@@ -318,6 +322,29 @@ public class DatabaseManager {
         }, dbExecutor);
     }
 
+    /**
+     * Get the most recent scan time for a specific chunk from scan_records.
+     * Only considers manual scans (not monitor events). Returns 0 if never scanned.
+     * Called from async DB thread only — never from main thread.
+     */
+    public long getLastChunkScanTime(String world, int chunkX, int chunkZ) {
+        String sql = "SELECT MAX(scan_time) FROM scan_records WHERE world = ? AND chunk_x = ? AND chunk_z = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, world);
+            ps.setInt(2, chunkX);
+            ps.setInt(3, chunkZ);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    long v = rs.getLong(1);
+                    return rs.wasNull() ? 0L : v;
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.FINE, "Failed to get last chunk scan time", e);
+        }
+        return 0L;
+    }
+
     public CompletableFuture<Integer> deleteScanRecordsBySession(int sessionId) {
         return CompletableFuture.supplyAsync(() -> {
             try (PreparedStatement ps = connection.prepareStatement(
@@ -401,6 +428,103 @@ public class DatabaseManager {
         }
     }
 
+    /**
+     * Delete ALL monitor records for a specific container location.
+     * Called by CONTAINER_CLOSE handler before writing new snapshot —
+     * the re-scan replaces all old monitor state for this container (scan覆盖monitor).
+     */
+    public void deleteMonitorRecordsByContainerLoc(String containerLoc) {
+        String sql = "DELETE FROM monitor_records WHERE container_loc = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, containerLoc);
+            int deleted = ps.executeUpdate();
+            if (deleted > 0) {
+                plugin.getLogger().fine("Cleaned " + deleted + " old monitor records for container: " + containerLoc);
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to delete monitor records for container: " + containerLoc, e);
+        }
+    }
+
+    /**
+     * Get distinct item_hashes from scan_records for a specific container location.
+     * Used by CONTAINER_CLOSE to determine which old scan items have been removed
+     * and need a CONTAINER_CLEAN marker.
+     */
+    public java.util.Set<String> getScanItemHashesByContainerLoc(String containerLoc) {
+        java.util.Set<String> hashes = new java.util.HashSet<>();
+        String sql = "SELECT DISTINCT item_hash FROM scan_records WHERE container_loc = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, containerLoc);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) hashes.add(rs.getString("item_hash"));
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to get scan item hashes for container: " + containerLoc, e);
+        }
+        return hashes;
+    }
+
+    /**
+     * Get distinct item_hashes from scan_records for an entire chunk.
+     * Used before re-scan to snapshot which items were previously flagged.
+     * After scan, any old hash not found in current violations gets a CLEAN marker.
+     */
+    public java.util.Set<String> getScanItemHashesByChunk(String world, int chunkX, int chunkZ) {
+        java.util.Set<String> hashes = new java.util.HashSet<>();
+        String sql = "SELECT DISTINCT item_hash FROM scan_records WHERE world = ? AND chunk_x = ? AND chunk_z = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, world);
+            ps.setInt(2, chunkX);
+            ps.setInt(3, chunkZ);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) hashes.add(rs.getString("item_hash"));
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to get scan item hashes for chunk: "
+                    + world + "(" + chunkX + "," + chunkZ + ")", e);
+        }
+        return hashes;
+    }
+
+    /**
+     * Delete ALL monitor records for a chunk. Called before scan to make scan results
+     * authoritative — the scan replaces all old monitor state for this chunk.
+     */
+    public void deleteMonitorRecordsByChunk(String world, int chunkX, int chunkZ) {
+        String sql = "DELETE FROM monitor_records WHERE world = ? AND chunk_x = ? AND chunk_z = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, world);
+            ps.setInt(2, chunkX);
+            ps.setInt(3, chunkZ);
+            int deleted = ps.executeUpdate();
+            if (deleted > 0) {
+                plugin.getLogger().fine("Cleaned " + deleted + " old monitor records for chunk: "
+                        + world + "(" + chunkX + "," + chunkZ + ")");
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to delete monitor records for chunk: "
+                    + world + "(" + chunkX + "," + chunkZ + ")", e);
+        }
+    }
+
+    /**
+     * Delete ALL monitor records for a player. Called before player scan to make scan
+     * results authoritative — the scan replaces all old monitor state for this player.
+     */
+    public void deleteMonitorRecordsByPlayer(String playerUuid) {
+        String sql = "DELETE FROM monitor_records WHERE player_uuid = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, playerUuid);
+            int deleted = ps.executeUpdate();
+            if (deleted > 0) {
+                plugin.getLogger().fine("Cleaned " + deleted + " old monitor records for player: " + playerUuid);
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to delete monitor records for player: " + playerUuid, e);
+        }
+    }
+
     /** Purge monitor records older than retention days. */
     public CompletableFuture<Integer> purgeOldMonitorRecords(int retentionDays) {
         return CompletableFuture.supplyAsync(() -> {
@@ -458,6 +582,78 @@ public class DatabaseManager {
         }, dbExecutor);
     }
 
+    /**
+     * Update scan session progress incrementally (does NOT change status).
+     * Called periodically during long-running scans so GUI shows real progress.
+     */
+    public CompletableFuture<Void> updateScanSessionProgress(int sessionId, int itemsScanned, int itemsFlagged) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = "UPDATE scan_sessions SET items_scanned=?, items_flagged=? WHERE id=? AND status='RUNNING'";
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setInt(1, itemsScanned);
+                ps.setInt(2, itemsFlagged);
+                ps.setInt(3, sessionId);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to update scan session progress", e);
+            }
+        }, dbExecutor);
+    }
+
+    /**
+     * Update scan session status (RUNNING, PAUSED, STOPPED, COMPLETED).
+     */
+    public CompletableFuture<Void> setSessionStatus(int sessionId, String status) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = "UPDATE scan_sessions SET status=? WHERE id=?";
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setString(1, status);
+                ps.setInt(2, sessionId);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to update scan session status", e);
+            }
+        }, dbExecutor);
+    }
+
+    /**
+     * Stop a scan session — sets status to STOPPED and records completed_at.
+     */
+    public CompletableFuture<Void> stopScanSession(int sessionId) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = "UPDATE scan_sessions SET status='STOPPED', completed_at=? WHERE id=?";
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setLong(1, System.currentTimeMillis());
+                ps.setInt(2, sessionId);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to stop scan session", e);
+            }
+        }, dbExecutor);
+    }
+
+    /**
+     * Reset sessions that cannot survive a server restart.
+     * - RUNNING sessions → STOPPED (the BukkitTask is gone, can't recover)
+     * - PAUSED sessions are left as-is (resumeScan will fall back to restart)
+     * Call this once on plugin enable, after DB is ready.
+     *
+     * @return future with count of sessions that were reset
+     */
+    public CompletableFuture<Integer> resetStaleSessionsOnStartup() {
+        return CompletableFuture.supplyAsync(() -> {
+            int count = 0;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE scan_sessions SET status='STOPPED', completed_at=? WHERE status='RUNNING'")) {
+                ps.setLong(1, System.currentTimeMillis());
+                count = ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to reset stale scan sessions", e);
+            }
+            return count;
+        }, dbExecutor);
+    }
+
     public ScanSession getScanSession(int id) {
         String sql = "SELECT * FROM scan_sessions WHERE id = ?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -469,6 +665,13 @@ public class DatabaseManager {
             plugin.getLogger().log(Level.SEVERE, "Failed to get scan session", e);
         }
         return null;
+    }
+
+    public int countScanSessions() {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM scan_sessions")) {
+            return rs.next() ? rs.getInt(1) : 0;
+        } catch (SQLException e) { return 0; }
     }
 
     public List<ScanSession> getScanSessions(int page, int pageSize) {
@@ -488,9 +691,10 @@ public class DatabaseManager {
 
     private ScanSession mapScanSession(ResultSet rs) throws SQLException {
         long completed = rs.getLong("completed_at");
+        boolean completedNull = rs.wasNull(); // must check immediately after reading the column
         return new ScanSession(
                 rs.getInt("id"), rs.getString("scan_type"), rs.getString("target"),
-                rs.getLong("started_at"), rs.wasNull() ? null : completed,
+                rs.getLong("started_at"), completedNull ? null : completed,
                 rs.getInt("items_scanned"), rs.getInt("total_items"), rs.getInt("items_flagged"),
                 rs.getString("status"));
     }
@@ -508,7 +712,7 @@ public class DatabaseManager {
             String violations, String severity, long scanTime
     ) {}
 
-    /** Query records by chunk (union of scan + monitor). */
+    /** Query records by chunk (union of scan + monitor). Excludes player-inventory records. */
     public List<UnifiedRecord> getRecordsByChunk(String world, int chunkX, int chunkZ, int page, int pageSize) {
         List<UnifiedRecord> list = new ArrayList<>();
         String sql = """
@@ -517,12 +721,14 @@ public class DatabaseManager {
                    item_slot, container, container_loc, violations, severity, scan_time
             FROM scan_records
             WHERE world = ? AND chunk_x = ? AND chunk_z = ?
+              AND container NOT IN ('inventory', 'armor', 'offhand', 'enderchest')
             UNION ALL
             SELECT id, 'MONITOR' AS source, item_hash, event_type AS scan_type,
                    world, chunk_x, chunk_z, player_uuid, player_name,
                    item_slot, container, container_loc, violations, severity, scan_time
             FROM monitor_records
             WHERE world = ? AND chunk_x = ? AND chunk_z = ?
+              AND container NOT IN ('inventory', 'armor', 'offhand', 'enderchest')
             ORDER BY scan_time DESC
             LIMIT ? OFFSET ?
         """;
@@ -540,11 +746,15 @@ public class DatabaseManager {
         return list;
     }
 
-    /** Count total records for a chunk (union). */
+    /** Count total records for a chunk (union). Excludes player-inventory records. */
     public int countRecordsByChunk(String world, int chunkX, int chunkZ) {
         String sql = """
-            SELECT (SELECT COUNT(*) FROM scan_records WHERE world=? AND chunk_x=? AND chunk_z=?)
-                 + (SELECT COUNT(*) FROM monitor_records WHERE world=? AND chunk_x=? AND chunk_z=?)
+            SELECT (SELECT COUNT(*) FROM scan_records
+                    WHERE world=? AND chunk_x=? AND chunk_z=?
+                      AND container NOT IN ('inventory', 'armor', 'offhand', 'enderchest'))
+                 + (SELECT COUNT(*) FROM monitor_records
+                    WHERE world=? AND chunk_x=? AND chunk_z=?
+                      AND container NOT IN ('inventory', 'armor', 'offhand', 'enderchest'))
         """;
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, world); ps.setInt(2, chunkX); ps.setInt(3, chunkZ);
@@ -659,6 +869,53 @@ public class DatabaseManager {
         } catch (SQLException e) { return 0; }
     }
 
+    /** Record for a player appearing in violation results (for player list view). */
+    public record PlayerViolationSummary(String playerUuid, String playerName, int scanCount, int monitorCount, long lastDetected) {}
+
+    /**
+     * Get distinct players who have violation records, with counts from both tables.
+     * Results sorted by lastDetected descending.
+     */
+    public List<PlayerViolationSummary> getDistinctViolationPlayers() {
+        List<PlayerViolationSummary> list = new ArrayList<>();
+        String sql = """
+            SELECT player_uuid, player_name,
+                   SUM(scan_count) AS scan_total,
+                   SUM(monitor_count) AS monitor_total,
+                   MAX(last_time) AS last_time
+            FROM (
+                SELECT player_uuid, MAX(player_name) AS player_name,
+                       COUNT(*) AS scan_count, 0 AS monitor_count,
+                       MAX(scan_time) AS last_time
+                FROM scan_records
+                WHERE player_uuid IS NOT NULL
+                GROUP BY player_uuid
+                UNION ALL
+                SELECT player_uuid, MAX(player_name) AS player_name,
+                       0 AS scan_count, COUNT(*) AS monitor_count,
+                       MAX(scan_time) AS last_time
+                FROM monitor_records
+                WHERE player_uuid IS NOT NULL
+                GROUP BY player_uuid
+            ) GROUP BY player_uuid
+            ORDER BY last_time DESC
+        """;
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                list.add(new PlayerViolationSummary(
+                        rs.getString("player_uuid"),
+                        rs.getString("player_name"),
+                        rs.getInt("scan_total"),
+                        rs.getInt("monitor_total"),
+                        rs.getLong("last_time")));
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to get distinct violation players", e);
+        }
+        return list;
+    }
+
     /** Get a single unified record by its source + id. */
     public UnifiedRecord getRecordById(String source, long id) {
         String table = source.equalsIgnoreCase("MONITOR") ? "monitor_records" : "scan_records";
@@ -732,6 +989,9 @@ public class DatabaseManager {
 
     public record PlayerWhitelistEntry(
             int id, String playerUuid, String playerName, boolean hidden, long createdAt) {}
+
+    public record WorldWhitelistEntry(
+            int id, String worldName, long createdAt) {}
 
     // --- Item Whitelist ---
 
@@ -898,6 +1158,104 @@ public class DatabaseManager {
                 ps.setString(1, playerUuid); ps.executeUpdate();
             } catch (SQLException e) {
                 plugin.getLogger().log(Level.SEVERE, "Failed to remove player whitelist entry", e);
+            }
+        }, dbExecutor);
+    }
+
+    // --- World Whitelist ---
+
+    public List<WorldWhitelistEntry> loadWorldWhitelist() {
+        List<WorldWhitelistEntry> list = new ArrayList<>();
+        String sql = "SELECT * FROM world_whitelist ORDER BY id";
+        try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) list.add(new WorldWhitelistEntry(
+                    rs.getInt("id"), rs.getString("world_name"), rs.getLong("created_at")));
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to load world whitelist", e);
+        }
+        return list;
+    }
+
+    public CompletableFuture<Integer> addWorldWhitelistEntry(String worldName) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = "INSERT OR IGNORE INTO world_whitelist (world_name, created_at) VALUES (?, ?)";
+            try (PreparedStatement ps = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                ps.setString(1, worldName);
+                ps.setLong(2, System.currentTimeMillis());
+                ps.executeUpdate();
+                try (ResultSet keys = ps.getGeneratedKeys()) { if (keys.next()) return keys.getInt(1); }
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to add world whitelist entry", e);
+            }
+            return -1;
+        }, dbExecutor);
+    }
+
+    public CompletableFuture<Void> removeWorldWhitelistEntry(String worldName) {
+        return CompletableFuture.runAsync(() -> {
+            try (PreparedStatement ps = connection.prepareStatement("DELETE FROM world_whitelist WHERE world_name=?")) {
+                ps.setString(1, worldName); ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to remove world whitelist entry", e);
+            }
+        }, dbExecutor);
+    }
+
+    // --- Bulk Clear Whitelists ---
+
+    public CompletableFuture<Integer> clearItemWhitelist() {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Statement stmt = connection.createStatement()) {
+                return stmt.executeUpdate("DELETE FROM item_whitelist");
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to clear item whitelist", e);
+                return 0;
+            }
+        }, dbExecutor);
+    }
+
+    public CompletableFuture<Integer> clearAreaWhitelistByType(String areaType) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM area_whitelist WHERE area_type = ?")) {
+                ps.setString(1, areaType);
+                return ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to clear area whitelist type: " + areaType, e);
+                return 0;
+            }
+        }, dbExecutor);
+    }
+
+    public CompletableFuture<Integer> clearRegionWhitelist() {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Statement stmt = connection.createStatement()) {
+                return stmt.executeUpdate("DELETE FROM region_whitelist");
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to clear region whitelist", e);
+                return 0;
+            }
+        }, dbExecutor);
+    }
+
+    public CompletableFuture<Integer> clearPlayerWhitelist() {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Statement stmt = connection.createStatement()) {
+                return stmt.executeUpdate("DELETE FROM player_whitelist");
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to clear player whitelist", e);
+                return 0;
+            }
+        }, dbExecutor);
+    }
+
+    public CompletableFuture<Integer> clearWorldWhitelist() {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Statement stmt = connection.createStatement()) {
+                return stmt.executeUpdate("DELETE FROM world_whitelist");
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to clear world whitelist", e);
+                return 0;
             }
         }, dbExecutor);
     }

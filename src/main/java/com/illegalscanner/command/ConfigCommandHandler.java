@@ -10,7 +10,7 @@ import java.util.List;
  * Handles /is config <reload|list|rules|monitor|scan> and all sub-trees.
  * Rules: enchant (conflict|level|compatibility), potion, stack, attribute, unbreakable
  * Monitor: enable|disable|status|interval|flush|retention|events
- * Scan: max_area|thread_pool|full_console_only
+ * Scan: max_area|thread_pool|console_only
  */
 public class ConfigCommandHandler implements SubCommandHandler {
 
@@ -407,7 +407,7 @@ public class ConfigCommandHandler implements SubCommandHandler {
 
     private boolean handleScan(CommandSender sender, String[] args) {
         if (args.length < 1) {
-            sender.sendMessage("§e/is config scan <max_area|thread_pool|full_console_only>"); return true;
+            sender.sendMessage("§e/is config scan <max_area|thread_pool|console_only>"); return true;
         }
         return switch (args[0].toLowerCase()) {
             case "max_area" -> {
@@ -430,7 +430,7 @@ public class ConfigCommandHandler implements SubCommandHandler {
                 } catch (NumberFormatException e) { sender.sendMessage("§c请输入数字。"); }
                 yield true;
             }
-            case "full_console_only" -> toggleBoolean(sender, "scan.full_console_only", "全盘扫描仅控制台", shift(args));
+            case "console_only" -> toggleBoolean(sender, "scan.console_only", "扫描仅控制台", shift(args));
             default -> { sender.sendMessage("§e未知: " + args[0]); yield true; }
         };
     }

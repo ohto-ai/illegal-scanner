@@ -48,13 +48,14 @@ public class ViewGuiListener implements Listener {
             if (rawSlot == 46 && holder.hasBack()) { navigateBack(player, holder); return; }
             if (rawSlot == 47) { handleSpecialSlot47(player, holder, click); return; }
             if (rawSlot == 48 && isChunkType(holder.type)) { handleRescan(player, holder); return; }
+            if (rawSlot == 48 && holder.type == ViewType.PLAYER) { handlePlayerRescan(player, holder); return; }
             if (rawSlot == 53 && holder.page < holder.totalPages) { reopenSame(player, holder, holder.page + 1); return; }
-            // SCAN view: slot 16 is refresh button
-            if (rawSlot == 16 && holder.type == ViewType.SCAN) {
-                plugin.getServer().getScheduler().runTask(plugin, () ->
-                    vh.openScanView(player, Integer.parseInt(holder.context), 1, holder.back));
-                return;
-            }
+            return;
+        }
+
+        // --- SCAN view: control buttons (slots 10, 16) — SCAN uses 27-slot GUI ---
+        if (holder.type == ViewType.SCAN && (rawSlot == 10 || rawSlot == 16)) {
+            handleScanControl(player, holder, rawSlot);
             return;
         }
 
@@ -113,6 +114,26 @@ public class ViewGuiListener implements Listener {
         return type == ViewType.CHUNK || type == ViewType.CHUNK_ITEM;
     }
 
+    private void handlePlayerRescan(Player player, ViewGuiHolder holder) {
+        String playerUuid = holder.context;
+        java.util.UUID uuid = java.util.UUID.fromString(playerUuid);
+        org.bukkit.OfflinePlayer offline = org.bukkit.Bukkit.getOfflinePlayer(uuid);
+        String playerName = offline.getName() != null ? offline.getName() : playerUuid;
+
+        player.sendMessage("§e正在重新扫描玩家 " + playerName + "...");
+
+        // Use ScanService.scanPlayer which handles online/offline + record saving
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            int flagged = plugin.getScanService().scanPlayer(playerName);
+            player.sendMessage("§a重新扫描完成: 发现 " + flagged + " 个违规物品。");
+
+            // Reopen the player view with same page and back
+            ViewCommandHandler vh = plugin.getCommandRouter().getViewHandler();
+            plugin.getServer().getScheduler().runTask(plugin, () ->
+                vh.openPlayerView(player, playerName, 1, holder.back));
+        });
+    }
+
     private void handleRescan(Player player, ViewGuiHolder holder) {
         // Parse chunk coordinates from context
         String[] parts = holder.context.split("/");
@@ -124,12 +145,57 @@ public class ViewGuiListener implements Listener {
         player.sendMessage("§e正在重新扫描区块 (" + cx + "," + cz + ")...");
         // Run scan on main thread
         plugin.getServer().getScheduler().runTask(plugin, () -> {
-            plugin.getScanService().scanChunk(player.getWorld(), cx, cz);
+            plugin.getScanService().scanChunk(player.getWorld(), cx, cz, System.currentTimeMillis());
             // Reopen the chunk view with same page and back
             ViewCommandHandler vh = plugin.getCommandRouter().getViewHandler();
             plugin.getServer().getScheduler().runTask(plugin, () ->
                 vh.openChunkView(player, world, cx, cz, 1, holder.back));
         });
+    }
+
+    // ==================== Scan Control (Pause / Resume / Stop / Restart) ====================
+
+    private void handleScanControl(Player player, ViewGuiHolder holder, int slot) {
+        int sessionId;
+        try {
+            sessionId = Integer.parseInt(holder.context);
+        } catch (NumberFormatException e) {
+            return;
+        }
+
+        String status = plugin.getScanService().getSessionStatus(sessionId);
+        if (status == null) return;
+
+        ViewCommandHandler vh = plugin.getCommandRouter().getViewHandler();
+
+        // Helper to reopen the scan view (must run on main thread)
+        Runnable reopen = () -> plugin.getServer().getScheduler().runTask(plugin, () ->
+            vh.openScanView(player, sessionId, 1, holder.back));
+
+        if (slot == 10) {
+            // Pause (RUNNING) or Resume (PAUSED)
+            if ("RUNNING".equals(status)) {
+                plugin.getScanService().pauseScan(sessionId)
+                        .thenRun(reopen);
+                player.sendMessage("§e扫描已暂停。");
+            } else if ("PAUSED".equals(status)) {
+                plugin.getScanService().resumeScan(sessionId)
+                        .thenRun(reopen);
+                player.sendMessage("§a扫描已继续。");
+            }
+        } else if (slot == 16) {
+            // Stop (RUNNING/PAUSED) or Restart (STOPPED)
+            if ("RUNNING".equals(status) || "PAUSED".equals(status)) {
+                plugin.getScanService().stopScan(sessionId)
+                        .thenRun(reopen);
+                player.sendMessage("§c扫描已停止。");
+            } else if ("STOPPED".equals(status)) {
+                player.sendMessage("§e正在重新启动扫描...");
+                plugin.getScanService().restartScan(sessionId);
+                player.sendMessage("§a扫描已重新启动。使用 /is view scan 查看进度。");
+                return; // Don't reopen — new session was created
+            }
+        }
     }
 
     // ==================== Slot 47 (TP / special) ====================
@@ -180,8 +246,18 @@ public class ViewGuiListener implements Listener {
                 case AREA -> {
                     if (chunkCoords != null) vh.openChunkView(player, holder.context.split("/")[0], chunkCoords[0], chunkCoords[1], 1, holder);
                 }
+                case RES -> {
+                    if (chunkCoords != null && world != null) vh.openChunkView(player, world, chunkCoords[0], chunkCoords[1], 1, holder);
+                }
+                case FULL -> {
+                    if (chunkCoords != null && world != null) vh.openChunkView(player, world, chunkCoords[0], chunkCoords[1], 1, holder);
+                }
                 case PLAYER -> {
                     if (record != null) vh.openRecordView(player, record.source(), record.id(), holder);
+                }
+                case PLAYER_LIST -> {
+                    String playerName = holder.slotContext.get(slot);
+                    if (playerName != null) vh.openPlayerView(player, playerName, 1, holder);
                 }
                 case ITEM_LIST -> {
                     var items = plugin.getDatabaseManager().getDistinctViolationItems();
@@ -194,12 +270,36 @@ public class ViewGuiListener implements Listener {
                     if (idx2 < sessions.size()) vh.openScanView(player, sessions.get(idx2).id(), 1, holder);
                 }
                 case SCAN -> {
-                    if (slot == 11) vh.openScanChunksView(player, Integer.parseInt(holder.context), 1, holder);
+                    if (slot == 11) {
+                        var session = plugin.getDatabaseManager().getScanSession(Integer.parseInt(holder.context));
+                        if (session != null && "player".equals(session.scanType())) {
+                            vh.openScanPlayerView(player, Integer.parseInt(holder.context), 1, holder);
+                        } else {
+                            vh.openScanChunksView(player, Integer.parseInt(holder.context), 1, holder);
+                        }
+                    }
                     else if (slot == 15) vh.openScanItemsView(player, Integer.parseInt(holder.context), 1, holder);
                 }
                 case SCAN_CHUNKS -> {
                     if (chunkCoords != null && world != null)
                         vh.openChunkView(player, world, chunkCoords[0], chunkCoords[1], 1, holder);
+                }
+                case SCAN_PLAYER -> {
+                    // Two sub-modes:
+                    // 1) Player list (context = sessionId, slotContext = playerUuid) → drill to player items
+                    // 2) Player items (context = sessionId/playerUuid, slotRecords = record) → drill to item detail
+                    String playerUuid = holder.slotContext.get(slot);
+                    if (playerUuid != null) {
+                        // Player list → open that player's items within this session
+                        int sid = Integer.parseInt(holder.context);
+                        String playerName = plugin.getServer().getOfflinePlayer(java.util.UUID.fromString(playerUuid)).getName();
+                        if (playerName == null) playerName = playerUuid;
+                        vh.openScanPlayerItemsView(player, sid, playerUuid, playerName, 1, holder);
+                    } else if (record != null) {
+                        // Player items → item detail
+                        String[] ctx = holder.context.split("/");
+                        vh.openScanItemDetailView(player, Integer.parseInt(ctx[0]), record.itemHash(), 1, holder);
+                    }
                 }
                 case SCAN_ITEMS -> {
                     if (record != null) vh.openScanItemDetailView(player, Integer.parseInt(holder.context), record.itemHash(), 1, holder);
@@ -293,11 +393,29 @@ public class ViewGuiListener implements Listener {
                     String[] p = holder.context.split("/");
                     vh.openAreaView(player, p[0], Integer.parseInt(p[1]), Integer.parseInt(p[2]), Integer.parseInt(p[3]), Integer.parseInt(p[4]), newPage, holder.back);
                 }
+                case RES -> {
+                    String[] p = holder.context.split("/");
+                    vh.openResView(player, p[0], p[1], p[2], newPage, holder.back);
+                }
+                case FULL -> vh.openFullView(player, newPage, holder.back);
+                case PLAYER_LIST -> vh.openPlayerListView(player, newPage, holder.back);
                 case ITEM_LIST -> vh.openItemListView(player, newPage, holder.back);
                 case ITEM -> vh.openItemDetailView(player, holder.context, newPage, holder.back);
                 case SCAN_LIST -> vh.openScanListView(player, newPage, holder.back);
                 case SCAN -> vh.openScanView(player, Integer.parseInt(holder.context), newPage, holder.back);
                 case SCAN_CHUNKS -> vh.openScanChunksView(player, Integer.parseInt(holder.context), newPage, holder.back);
+                case SCAN_PLAYER -> {
+                    if (holder.context.contains("/")) {
+                        String[] sp = holder.context.split("/", 2);
+                        int sid = Integer.parseInt(sp[0]);
+                        String puid = sp[1];
+                        String pname = plugin.getServer().getOfflinePlayer(java.util.UUID.fromString(puid)).getName();
+                        if (pname == null) pname = puid;
+                        vh.openScanPlayerItemsView(player, sid, puid, pname, newPage, holder.back);
+                    } else {
+                        vh.openScanPlayerView(player, Integer.parseInt(holder.context), newPage, holder.back);
+                    }
+                }
                 case SCAN_ITEMS -> vh.openScanItemsView(player, Integer.parseInt(holder.context), newPage, holder.back);
                 case SCAN_ITEM_DETAIL -> {
                     String[] sp = holder.context.split("/", 2);

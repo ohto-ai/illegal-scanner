@@ -68,18 +68,57 @@ public class CheckCommandHandler implements SubCommandHandler {
             sender.sendMessage("§e用法: /is check player <玩家名>"); return true;
         }
         String name = args.length >= 2 ? args[1] : ((Player) sender).getName();
-        Player target = plugin.getServer().getPlayer(name);
-        if (target == null) {
-            sender.sendMessage("§c玩家不在线: " + name); return true;
+
+        // Try online player first — exact match only (no prefix matching)
+        Player target = resolveExactPlayer(name);
+        if (target != null) {
+            sender.sendMessage("§e正在检测在线玩家 " + target.getName() + "...");
+            int flagged = 0;
+            for (ItemStack item : target.getInventory().getContents()) {
+                if (item != null && !item.getType().isAir()) {
+                    if (!plugin.getValidationEngine().validate(item).isEmpty()) flagged++;
+                }
+            }
+            // Also check ender chest
+            if (plugin.getConfigManager().getConfig().getBoolean("scan.scan_player_enderchests", true)) {
+                for (ItemStack item : target.getEnderChest().getContents()) {
+                    if (item != null && !item.getType().isAir()) {
+                        if (!plugin.getValidationEngine().validate(item).isEmpty()) flagged++;
+                    }
+                }
+            }
+            sender.sendMessage("§a检测完成: " + target.getName() + " 背包+末影箱中有 " + flagged + " 个可疑物品。（未记录）");
+            return true;
         }
-        sender.sendMessage("§e正在检测玩家 " + target.getName() + "...");
+
+        // Try offline player via .dat file
+        org.bukkit.OfflinePlayer offline = plugin.getServer().getOfflinePlayer(name);
+        if (!offline.hasPlayedBefore()) {
+            sender.sendMessage("§c未找到玩家: " + name); return true;
+        }
+
+        sender.sendMessage("§e正在检测离线玩家 " + offline.getName() + " (读取存档)...");
+        java.io.File playerDataFolder = new java.io.File(
+                plugin.getServer().getWorlds().get(0).getWorldFolder(), "playerdata");
+        java.io.File playerFile = new java.io.File(playerDataFolder, offline.getUniqueId() + ".dat");
+
+        if (!playerFile.exists()) {
+            sender.sendMessage("§c未找到离线玩家数据文件: " + name); return true;
+        }
+
+        java.util.List<ItemStack> items = com.illegalscanner.scanner.NbtUtil.readPlayerInventory(playerFile, plugin);
+        if (items.isEmpty()) {
+            sender.sendMessage("§a检测完成: " + offline.getName() + " 离线存档中无物品或读取失败。");
+            return true;
+        }
+
         int flagged = 0;
-        for (ItemStack item : target.getInventory().getContents()) {
+        for (ItemStack item : items) {
             if (item != null && !item.getType().isAir()) {
                 if (!plugin.getValidationEngine().validate(item).isEmpty()) flagged++;
             }
         }
-        sender.sendMessage("§a检测完成: " + target.getName() + " 背包中有 " + flagged + " 个可疑物品。（未记录）");
+        sender.sendMessage("§a检测完成: " + offline.getName() + " 离线存档中有 " + flagged + " 个可疑物品（共 " + items.size() + " 件）。（未记录）");
         return true;
     }
 
@@ -94,6 +133,16 @@ public class CheckCommandHandler implements SubCommandHandler {
         int flagged = plugin.getScanService().getChunkScanner().scanChunkQuick(p.getWorld().getChunkAt(cx, cz));
         sender.sendMessage("§a检测完成: 发现 " + flagged + " 个违规物品。（未记录）");
         return true;
+    }
+
+    /** Resolve a player by exact name (case-insensitive). Unlike Bukkit.getPlayer() this does NOT do prefix matching. */
+    private Player resolveExactPlayer(String name) {
+        Player exact = plugin.getServer().getPlayerExact(name);
+        if (exact != null) return exact;
+        for (Player online : plugin.getServer().getOnlinePlayers()) {
+            if (online.getName().equalsIgnoreCase(name)) return online;
+        }
+        return null;
     }
 
     private boolean hasAccess(CommandSender sender) {
