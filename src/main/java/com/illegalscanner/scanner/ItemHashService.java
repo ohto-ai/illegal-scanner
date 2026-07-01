@@ -45,8 +45,9 @@ public final class ItemHashService {
     public String computeHash(ItemStack item) {
         if (item == null || item.getType().isAir()) return null;
 
-        // Build a cache key from type + serialized bytes fingerprint
-        String cacheKey = item.getType().name() + "|" + item.serializeAsBytes().length;
+        // Build a cache key from type + hash of raw serialized bytes (not just length —
+        // two different items of the same type could serialize to the same length).
+        String cacheKey = item.getType().name() + "|" + java.util.Arrays.hashCode(item.serializeAsBytes());
         String cached = cache.get(cacheKey);
         if (cached != null) return cached;
 

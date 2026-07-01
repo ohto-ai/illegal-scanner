@@ -18,7 +18,7 @@ public class ISTabCompleter implements TabCompleter {
 
     private static final List<String> MAIN = List.of(
             "scan", "check", "view", "report", "history", "monitor", "config",
-            "whitelist", "watchlist", "give", "reload", "status"
+            "whitelist", "watchlist", "hash", "give", "reload", "status"
     );
 
     private static final List<String> SCAN_SUB = List.of("chunk", "player", "area", "res", "world", "full", "pause", "resume", "stop", "restart");
@@ -85,7 +85,7 @@ public class ISTabCompleter implements TabCompleter {
             case "report" -> completeReport(args);
             case "history" -> completeHistory(args);
             case "config" -> completeConfig(args);
-            case "whitelist" -> completeWhitelist(args, partial);
+            case "whitelist" -> completeWhitelist(sender, args, partial);
             case "watchlist" -> completeWatchlist(args, partial);
             default -> out;
         };
@@ -163,21 +163,106 @@ public class ISTabCompleter implements TabCompleter {
         return List.of();
     }
 
-    private List<String> completeWhitelist(String[] args, String partial) {
+    private List<String> completeWhitelist(CommandSender sender, String[] args, String partial) {
         String type = args[1].toLowerCase();
         if (args.length == 3) {
             if (type.equals("player")) return filter(WL_ACTIONS, partial);
-            if (type.equals("item")) return filter(List.of("add", "gui", "remove", "list", "clear"), partial);
+            if (type.equals("item")) return filter(List.of("add", "gui", "remove", "list", "clear", "import"), partial);
             return filter(List.of("add", "remove", "list", "clear"), partial);
         }
+
+        String action = args[2].toLowerCase();
+
+        // item import: /is whitelist item import from container <x> <y> <z>
+        if (type.equals("item") && action.equals("import")) {
+            return completeItemImport(sender, args, partial);
+        }
+
         if (args.length == 4) {
-            String action = args[2].toLowerCase();
             if (type.equals("player") && (action.equals("add") || action.equals("remove")))
                 return onlinePlayerNames(partial);
             if (type.equals("world") && (action.equals("add") || action.equals("remove")))
                 return worldNames(partial);
             if (type.equals("res") && action.equals("add"))
                 return plugin.getRegionWhitelistManager().getAvailablePlugins().stream().filter(p -> p.toLowerCase().startsWith(partial)).toList();
+        }
+        return List.of();
+    }
+
+    /** Tab-complete /is whitelist item import from container [x] [y] [z]. */
+    private List<String> completeItemImport(CommandSender sender, String[] args, String partial) {
+        if (args.length == 4) return filter(List.of("from"), partial);
+        if (args.length == 5) return filter(List.of("container"), partial);
+        // args.length 6-8: container coordinates — suggest nearby containers
+        return nearbyContainerCoords(sender, args, partial);
+    }
+
+    /**
+     * Scans blocks within 6 blocks of the sender for containers (InventoryHolder)
+     * and returns the coordinate matching the current argument position.
+     */
+    private List<String> nearbyContainerCoords(CommandSender sender, String[] args, String partial) {
+        if (!(sender instanceof Player player)) return List.of();
+        var loc = player.getLocation();
+        var world = player.getWorld();
+        int radius = 6;
+
+        java.util.Set<Integer> xs = new java.util.LinkedHashSet<>();
+        java.util.Set<Integer> ys = new java.util.LinkedHashSet<>();
+        java.util.Set<Integer> zs = new java.util.LinkedHashSet<>();
+
+        // Single scan over the 6-block radius to collect container coordinates
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    var block = world.getBlockAt(loc.getBlockX() + dx, loc.getBlockY() + dy, loc.getBlockZ() + dz);
+                    if (block.getState() instanceof org.bukkit.inventory.InventoryHolder) {
+                        xs.add(block.getX());
+                        ys.add(block.getY());
+                        zs.add(block.getZ());
+                    }
+                }
+            }
+        }
+
+        // args[5] = x, args[6] = y, args[7] = z
+        if (args.length == 6) {
+            return xs.stream().map(String::valueOf).filter(s -> s.startsWith(partial)).limit(20).toList();
+        }
+        if (args.length == 7) {
+            int enteredX;
+            try { enteredX = Integer.parseInt(args[5]); } catch (NumberFormatException e) { return List.of(); }
+            // Re-scan to collect Y values for containers whose X matches
+            java.util.Set<Integer> filteredY = new java.util.LinkedHashSet<>();
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dy = -radius; dy <= radius; dy++) {
+                    for (int dz = -radius; dz <= radius; dz++) {
+                        var b = world.getBlockAt(loc.getBlockX() + dx, loc.getBlockY() + dy, loc.getBlockZ() + dz);
+                        if (b.getX() == enteredX && b.getState() instanceof org.bukkit.inventory.InventoryHolder)
+                            filteredY.add(b.getY());
+                    }
+                }
+            }
+            return filteredY.stream().map(String::valueOf).filter(s -> s.startsWith(partial)).limit(20).toList();
+        }
+        if (args.length == 8) {
+            int enteredX, enteredY;
+            try {
+                enteredX = Integer.parseInt(args[5]);
+                enteredY = Integer.parseInt(args[6]);
+            } catch (NumberFormatException e) { return List.of(); }
+            java.util.Set<Integer> filteredZ = new java.util.LinkedHashSet<>();
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dy = -radius; dy <= radius; dy++) {
+                    for (int dz = -radius; dz <= radius; dz++) {
+                        var b = world.getBlockAt(loc.getBlockX() + dx, loc.getBlockY() + dy, loc.getBlockZ() + dz);
+                        if (b.getX() == enteredX && b.getY() == enteredY
+                                && b.getState() instanceof org.bukkit.inventory.InventoryHolder)
+                            filteredZ.add(b.getZ());
+                    }
+                }
+            }
+            return filteredZ.stream().map(String::valueOf).filter(s -> s.startsWith(partial)).limit(20).toList();
         }
         return List.of();
     }

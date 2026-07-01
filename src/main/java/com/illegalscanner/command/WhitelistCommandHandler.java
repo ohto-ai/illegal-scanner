@@ -83,7 +83,7 @@ public class WhitelistCommandHandler implements SubCommandHandler {
     // --- Item ---
 
     private boolean handleItem(CommandSender sender, String[] args) {
-        if (args.length < 1) { sender.sendMessage("§e/is whitelist item <add|gui|remove|list|clear>"); return true; }
+        if (args.length < 1) { sender.sendMessage("§e/is whitelist item <add|gui|remove|list|clear|import>"); return true; }
         switch (args[0].toLowerCase()) {
             case "add" -> {
                 if (!(sender instanceof Player player)) { sender.sendMessage("§cPlayer only."); return true; }
@@ -122,6 +122,10 @@ public class WhitelistCommandHandler implements SubCommandHandler {
                                 + (e.customNamePattern() != null ? " 名称:" + e.customNamePattern() : ""));
                 }
             }
+            case "import" -> {
+                if (!(sender instanceof Player player)) { sender.sendMessage("§cPlayer only."); return true; }
+                return handleItemImport(player, shift(args));
+            }
             case "clear" -> {
                 var db = plugin.getDatabaseManager();
                 db.clearItemWhitelist().thenAccept(count -> {
@@ -130,6 +134,89 @@ public class WhitelistCommandHandler implements SubCommandHandler {
                 });
             }
             default -> { sender.sendMessage("§e未知操作: " + args[0]); }
+        }
+        return true;
+    }
+
+    // --- Item Import ---
+
+    /**
+     * /is whitelist item import from container &lt;x&gt; &lt;y&gt; &lt;z&gt;
+     * Bulk-imports every item in the target container into the item whitelist.
+     */
+    private boolean handleItemImport(Player player, String[] args) {
+        if (args.length < 5 || !"from".equalsIgnoreCase(args[0]) || !"container".equalsIgnoreCase(args[1])) {
+            player.sendMessage("§e用法: /is whitelist item import from container <x> <y> <z>");
+            return true;
+        }
+        try {
+            int x = Integer.parseInt(args[2]);
+            int y = Integer.parseInt(args[3]);
+            int z = Integer.parseInt(args[4]);
+            var world = player.getWorld();
+            var block = world.getBlockAt(x, y, z);
+
+            if (!(block.getState() instanceof org.bukkit.inventory.InventoryHolder holder)) {
+                player.sendMessage("§c目标方块不是容器 (箱子/木桶/潜影盒 等)。");
+                return true;
+            }
+
+            var inv = holder.getInventory();
+            var contents = inv.getContents();
+            var mgr = plugin.getItemWhitelistManager();
+            var db = plugin.getDatabaseManager();
+
+            // Track hashes we're inserting to avoid adding duplicates within the same batch
+            var seenHashes = new java.util.HashSet<String>();
+            int added = 0, skipped = 0;
+            var futures = new java.util.ArrayList<java.util.concurrent.CompletableFuture<Integer>>();
+
+            for (var stack : contents) {
+                if (stack == null || stack.getType().isAir()) continue;
+
+                String mat = stack.getType().name();
+                String itemHash = plugin.getItemHashService().resolve(stack);
+
+                // Skip if already in whitelist or already added in this batch
+                if (itemHash != null && (mgr.isWhitelisted(stack) || !seenHashes.add(itemHash))) {
+                    skipped++;
+                    continue;
+                }
+
+                // Also skip if material-only match (hash is null but material already whitelisted generically)
+                if (itemHash == null && mgr.isWhitelisted(stack)) {
+                    skipped++;
+                    continue;
+                }
+
+                String eJson = mgr.buildEnchantmentsJson(stack);
+                String aJson = mgr.buildAttributesJson(stack);
+
+                var entry = new com.illegalscanner.database.DatabaseManager.ItemWhitelistEntry(
+                        -1, mat, itemHash, null, null,
+                        eJson, aJson, System.currentTimeMillis());
+
+                futures.add(db.addItemWhitelistEntry(entry));
+                added++;
+            }
+
+            if (added == 0 && skipped == 0) {
+                player.sendMessage("§e容器为空。");
+                return true;
+            }
+
+            // Wait for all inserts, then reload cache once
+            final int finalAdded = added;
+            final int finalSkipped = skipped;
+            java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+                    .thenRun(() -> {
+                        mgr.loadCache();
+                        player.sendMessage("§a已从容器导入 §f" + finalAdded + " §a个物品"
+                                + (finalSkipped > 0 ? "，跳过 §f" + finalSkipped + " §a个已存在" : ""));
+                    });
+
+        } catch (NumberFormatException e) {
+            player.sendMessage("§c坐标必须是整数。");
         }
         return true;
     }
