@@ -57,7 +57,7 @@ Commands registered.
 手持任意物品，执行：
 
 ```
-/is item check
+/is check item
 ```
 
 如果物品合法：
@@ -66,31 +66,13 @@ Commands registered.
 如果物品非法：
 > ❌ 列出所有违规项（附魔超标、互斥附魔、属性修饰异常等）
 
-### 2.2 查看物品数据组件
-
-```
-/is item info
-```
-
-显示物品的完整数据组件列表（unbreakable、lore、custom_name、attribute_modifiers 等）。
-
-### 2.3 扫描玩家
-
-```
-/is scan player Steve
-```
-
-扫描 Steve 的背包、盔甲、副手、末影箱，检测到的非法物品自动入库。
-
-### 2.4 扫描当前区块
-
-站在目标区块内执行：
+### 2.2 快速扫描当前区块
 
 ```
 /is scan chunk
 ```
 
-### 2.5 启动全服渐进扫描
+### 2.3 启动全服渐进扫描
 
 ```
 /is scan full
@@ -105,66 +87,190 @@ Commands registered.
 | Phase 3 | 后台扫描离线玩家数据文件 |
 | Phase 4 | 后台逐区块扫描未加载区块（每 tick 1 区块） |
 
-### 2.6 查看进度
+### 2.4 查看进度
 
 ```
 /is status
 ```
 
-输出示例：
-> `Full scan running: 1247/8932 chunks scanned, 15 items flagged, 342 queued`
-
-### 2.7 查看报告
+### 2.5 查看报告（GUI）
 
 ```
-/is report
+/is view chunk    # 查看当前区块
+/is view player   # 查看指定玩家
+```
+
+### 2.6 查看报告（文本）
+
+```
+/is report chunk    # 文本查看当前区块
+/is report player <玩家名>
+/is report scan     # 查看扫描会话列表
 ```
 
 ---
 
 ## 3. 命令参考
 
-### `/es` 主命令（别名: `/illegalscanner`）
+主命令：`/is`（别名：`/illegalscanner`）
 
-#### 扫描类
+### 3.1 扫描 (`/is scan`)
 
-| 命令 | 说明 |
-|---|---|
-| `/is scan player <玩家名>` | 扫描指定玩家（在线或离线） |
-| `/is scan chunk` | 扫描当前所在区块的所有容器 |
-| `/is scan world [世界名]` | 扫描指定世界的已加载区块 |
-| `/is scan full [世界名]` | 启动全量渐进扫描（不指定则扫描所有世界） |
-| `/is scan cancel` | 取消正在进行的扫描 |
-
-#### 报告类
+权限: `illegalscanner.scan`
 
 | 命令 | 说明 |
 |---|---|
-| `/is report` | 扫描统计摘要 |
-| `/is report stats` | 同上 |
-| `/is report detail <ID>` | 查看指定记录的完整详情 |
-| `/is report player <玩家名>` | 查看指定玩家的所有违规物品 |
+| `/is scan chunk` | 扫描当前所在区块 |
+| `/is scan player [-online\|-offline\|-all] [玩家名]` | 扫描玩家（可选标记过滤） |
+| `/is scan area <x1> <z1> <x2> <z2> [世界名]` | 扫描矩形区域（按区块） |
+| `/is scan res <区域名>` | 扫描领地/区域（WorldGuard / Residence） |
+| `/is scan world [世界名\|all_world] [loaded_chunks\|unloaded_chunks\|all_chunks]` | 扫描世界 |
+| `/is scan full` | 全服渐进扫描 |
+| `/is scan pause <sessionId>` | 暂停扫描会话 |
+| `/is scan resume <sessionId>` | 恢复扫描会话 |
+| `/is scan stop <sessionId>` | 停止扫描会话 |
+| `/is scan restart <sessionId>` | 重启扫描会话 |
 
-#### 物品检查
+### 3.2 快速检测 (`/is check`)
 
-| 命令 | 说明 |
-|---|---|
-| `/is item check` | 校验手中物品的合法性 |
-| `/is item info` | 显示手中物品的完整数据组件列表 |
-
-#### 数据库管理
-
-| 命令 | 说明 |
-|---|---|
-| `/is db export [json\|csv]` | 导出数据库（默认 JSON） |
-| `/is db vacuum` | 压缩优化数据库 |
-
-#### 其他
+权限: `illegalscanner.inspect` — **不记录到数据库**
 
 | 命令 | 说明 |
 |---|---|
-| `/is reload` | 重载配置文件 |
-| `/is status` | 查看当前扫描进度 |
+| `/is check item` | 校验手中物品的合法性 |
+| `/is check player [玩家名]` | 检查玩家背包 + 末影箱 |
+| `/is check chunk` | 快速扫描当前区块 |
+
+### 3.3 GUI 查看 (`/is view`)
+
+权限: `illegalscanner.report` — 交互式 GUI 界面（支持翻页、回溯、物品快照、传送）
+
+| 命令 | 说明 |
+|---|---|
+| `/is view chunk` | 当前区块违规总览 |
+| `/is view player [玩家名]` | 玩家违规物品列表 |
+| `/is view world [世界名]` | 世界违规区块概览 |
+| `/is view area <x1> <z1> <x2> <z2> [世界名]` | 区域违规概览 |
+| `/is view res <插件名> <区域名> [世界名]` | 领地违规概览 |
+| `/is view full` | 全服违规概览 |
+| `/is view scan [sessionId]` | 扫描会话列表 / 详情（支持自动刷新） |
+| `/is view record <SCAN\|MONITOR> <id>` | 单条违规记录详情 |
+| `/is view item [itemHash]` | 违规物品类型列表 / 详情 |
+
+### 3.4 文本报告 (`/is report`)
+
+权限: `illegalscanner.report` — 聊天框文本输出（支持分页）
+
+| 命令 | 说明 |
+|---|---|
+| `/is report chunk` | 当前区块文本报告 |
+| `/is report player <玩家名> [页码]` | 玩家文本报告 |
+| `/is report item [itemHash] [页码]` | 物品类型列表 / 指定 hash 的所有记录 |
+| `/is report scan [sessionId] [页码]` | 扫描会话列表 / 会话记录 |
+| `/is report record <SCAN\|MONITOR> <id>` | 单条违规记录完整详情 |
+| `/is report area <x1> <z1> <x2> <z2> [世界名] [页码]` | 区域文本报告 |
+| `/is report res <插件名> <区域名> [世界名] [页码]` | 领地文本报告 |
+| `/is report world [世界名] [页码]` | 世界文本报告（已加载区块） |
+
+### 3.5 历史记录 (`/is history`)
+
+权限: `illegalscanner.report`
+
+| 命令 | 说明 |
+|---|---|
+| `/is history chunk [页码]` | 查看当前区块的历史违规记录 |
+| `/is history player <玩家名> [页码]` | 查看玩家的历史违规记录 |
+
+### 3.6 实时监测 (`/is monitor`)
+
+权限: `illegalscanner.admin`
+
+| 命令 | 说明 |
+|---|---|
+| `/is monitor enable` | 启用实时监测引擎 |
+| `/is monitor disable` | 禁用实时监测引擎 |
+| `/is monitor status` | 查看监测引擎状态（活跃事件数、轮询间隔、保留天数） |
+
+### 3.7 配置管理 (`/is config`)
+
+权限: `illegalscanner.admin`
+
+#### 基础
+
+| 命令 | 说明 |
+|---|---|
+| `/is config reload` | 重载配置、消息文件和监测引擎 |
+| `/is config list` | 列出当前配置的所有键值 |
+
+#### 规则配置 (`/is config rules`)
+
+| 命令 | 说明 |
+|---|---|
+| `/is config rules enchant conflict <enable\|disable\|status>` | 附魔冲突检测开关 |
+| `/is config rules enchant level <enable\|disable\|status\|set\|reset>` | 附魔等级检测 / 管理 |
+| `/is config rules enchant compatibility <enable\|disable\|status\|add\|remove>` | 附魔物品兼容性检测 / 管理 |
+| `/is config rules potion <enable\|disable\|status\|level\|effects>` | 药水检测开关 / 等级管理 / 效果上限 |
+| `/is config rules stack <enable\|disable\|status\|auto_fix\|set\|reset\|default\|list>` | 堆叠限制检测 / 自定义堆叠值 |
+| `/is config rules attribute <enable\|disable\|status\|mode\|set\|reset\|list>` | 属性修饰检测 / 模式切换 |
+| `/is config rules unbreakable <enable\|disable\|status\|action\|restore>` | 不可破坏标签检测 / 处理策略 |
+
+#### 监测配置 (`/is config monitor`)
+
+| 命令 | 说明 |
+|---|---|
+| `/is config monitor enable\|disable\|status` | 监测引擎开关 / 状态 |
+| `/is config monitor interval <秒>` | 设置扫描间隔（秒） |
+| `/is config monitor flush <秒>` | 设置去重窗口（秒） |
+| `/is config monitor retention <天>` | 设置数据保留天数 |
+| `/is config monitor events <list\|enable\|disable> [事件名]` | 管理监测事件类型 |
+
+#### 扫描配置 (`/is config scan`)
+
+| 命令 | 说明 |
+|---|---|
+| `/is config scan max_area <区块数>` | 设置区域扫描最大区块数 |
+| `/is config scan thread_pool <大小>` | 设置线程池大小 |
+| `/is config scan console_only <enable\|disable>` | 仅控制台扫描模式 |
+
+### 3.8 白名单管理 (`/is whitelist`)
+
+权限: `illegalscanner.admin` — 支持六种白名单类型
+
+| 类型 | 操作 | 说明 |
+|---|---|---|
+| `player` | `add <玩家名>` | 添加玩家白名单 |
+| `player` | `remove <玩家名>` | 移除玩家白名单 |
+| `player` | `list\|clear` | 列表 / 清空 |
+| `item` | `add` | 手持物品加入白名单 |
+| `item` | `gui [页码]` | 打开 GUI 白名单管理器 |
+| `item` | `remove <id>\|list\|clear` | 移除 / 列表 / 清空 |
+| `chunk` | `add` | 当前区块加入白名单 |
+| `chunk` | `remove <id>\|list\|clear` | 移除 / 列表 / 清空 |
+| `area` | `add <x1> <z1> <x2> <z2> [世界名]` | 区域加入白名单 |
+| `area` | `remove <id>\|list\|clear` | 移除 / 列表 / 清空 |
+| `res` | `add <插件名> <区域名> [世界名]` | 领地区域加入白名单 |
+| `res` | `remove <id>\|list\|clear` | 移除 / 列表 / 清空 |
+| `world` | `add [世界名]` | 添加世界白名单 |
+| `world` | `remove [世界名]\|list\|clear` | 移除 / 列表 / 清空 |
+
+### 3.9 监控列表 (`/is watchlist`)
+
+权限: `illegalscanner.admin` — 按 Material ID 标记监控物品，无论 NBT 如何都会被标记
+
+| 命令 | 说明 |
+|---|---|
+| `/is watchlist add <materialID>` | 添加 Material 到监控列表 |
+| `/is watchlist remove <materialID>` | 从监控列表移除 Material |
+| `/is watchlist list` | 列出所有监控的 Material |
+| `/is watchlist clear` | 清空监控列表 |
+
+### 3.10 其他
+
+| 命令 | 说明 |
+|---|---|
+| `/is give <item_hash>` | 根据 hash 获取物品（调试用） |
+| `/is reload` | 重载配置文件和消息 |
+| `/is status` | 查看服务状态 |
 
 ---
 
@@ -172,10 +278,10 @@ Commands registered.
 
 | 权限 | 包含内容 | 默认 |
 |---|---|---|
-| `illegalscanner.admin` | 所有命令 | OP |
+| `illegalscanner.admin` | 所有命令（父权限） | OP |
 | `illegalscanner.scan` | 扫描命令 (`/is scan ...`) | OP |
-| `illegalscanner.report` | 报告命令 (`/is report`) | OP |
-| `illegalscanner.inspect` | 物品检查 (`/is item ...`) | OP |
+| `illegalscanner.report` | 报告/查看/历史 (`/is report`, `/is view`, `/is history`) | OP |
+| `illegalscanner.inspect` | 快速检测 (`/is check ...`) | OP |
 | `illegalscanner.notify` | 收到管理员通知 | OP |
 
 ---
@@ -193,6 +299,9 @@ scan:
   full_scan_delay_ticks: 1200       # 启动后延迟（1200 ticks = 60秒）
   full_scan_chunks_per_tick: 1      # 每tick扫描区块数（抬高会增加TPS压力）
   full_scan_player_data: true       # 同时扫描离线玩家数据
+  max_area_chunks: 10000            # 区域扫描最大区块数
+  thread_pool_size: 4               # 线程池大小
+  console_only: false               # 仅控制台输出扫描进度
 
   # 事件驱动扫描
   event_scan_enabled: true          # 启用实时事件监听
@@ -224,17 +333,30 @@ validation:
   enforce_max_levels: true
   enforce_conflicts: true
   enforce_item_compatibility: true
+  enchant_max_levels: {}            # 自定义附魔等级上限
 
   # 数据组件检查
   flag_unbreakable: true            # 无法破坏标签
+  unbreakable_action: flag          # flag=标记 / remove=移除
+  unbreakable_restore: true         # 登出时恢复移除的 unbreakable
   flag_custom_model_data: true      # 自定义模型数据
   flag_adventure_tags: true         # can_place_on / can_destroy
   flag_lore_presence: true          # lore存在即非法（原版生存无来源）
   flag_item_name_presence: true     # item_name存在即非法
+  custom_name_max_length: 50        # 铁砧限制
+  flag_non_italic_custom_name: true # 非斜体名称=命令专属
+  enforce_stack_limits: true        # 堆叠限制检测
+  stack_auto_fix: false             # 自动修正堆叠数量
+  default_max_stack: 64             # 默认堆叠上限
+  enforce_attribute_limits: true    # 属性修饰限制检测
+  attribute_mode: all               # all=全面检测 / threshold=阈值检测
+  attribute_limits: {}              # 自定义属性上限
 
   # 药水
+  potion_checks_enabled: true
   potion_max_amplifier: 1           # 最大效果等级（0=I级, 1=II级）
   potion_max_duration_ticks: 9600   # 最大持续时间（9600=8分钟）
+  potion_max_effects: 5             # 最大药水效果数量
 
   # 书册
   book_max_pages: 100
@@ -242,13 +364,19 @@ validation:
   # 烟花
   firework_max_flight: 3
   firework_max_explosions: 10
-
-  # 自定义名称
-  custom_name_max_length: 50        # 铁砧限制
-  flag_non_italic_custom_name: true # 非斜体名称=命令专属
 ```
 
-### 5.3 告警设置
+### 5.3 监测设置
+
+```yaml
+monitor:
+  enabled: false                    # 实时监测开关
+  interval_seconds: 5               # 扫描间隔（秒）
+  flush_seconds: 300                # 去重窗口（秒）
+  retention_days: 7                 # 数据保留天数
+```
+
+### 5.4 告警设置
 
 ```yaml
 alerts:
@@ -257,7 +385,7 @@ alerts:
   admin_notify: false               # 通知在线管理员
 ```
 
-### 5.4 忽略物品
+### 5.5 忽略物品
 
 ```yaml
 ignore_materials:
@@ -271,9 +399,6 @@ ignore_materials:
   - DEBUG_STICK
   - STRUCTURE_VOID
 ```
-
-
-物品名称或 lore 中包含这些关键字将被标记为 SUSPICIOUS。
 
 ---
 
@@ -371,7 +496,7 @@ ignore_materials:
 
 数据库文件：`plugins/illegal-scanner/items.db`
 
-### illegal_items 表
+### 7.1 illegal_items 表
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -398,7 +523,20 @@ ignore_materials:
 | `resolved_at` | INTEGER | 处理时间 |
 | `notes` | TEXT | 管理员备注 |
 
-### 查询示例
+### 7.2 白名单 / 监控列表表
+
+| 表名 | 用途 |
+|---|---|
+| `player_whitelist` | 玩家白名单 |
+| `item_whitelist` | 物品白名单 |
+| `chunk_whitelist` | 区块白名单 |
+| `area_whitelist` | 区域白名单 |
+| `world_whitelist` | 世界白名单 |
+| `scan_sessions` | 扫描会话记录 |
+| `monitor_records` | 监测引擎记录 |
+| `watch_materials` | 监控列表（Material ID） |
+
+### 7.3 查询示例
 
 ```sql
 -- 查看所有活跃的非法物品
@@ -412,6 +550,13 @@ GROUP BY player_name ORDER BY cnt DESC;
 
 -- 查看某个物品的完整快照（用于复原）
 SELECT item_snapshot FROM illegal_items WHERE id = 1;
+
+-- 查看扫描会话
+SELECT id, scan_type, target, status, total_chunks, scanned_chunks
+FROM scan_sessions ORDER BY started_at DESC;
+
+-- 查看监控列表
+SELECT material_id FROM watch_materials;
 ```
 
 ---
@@ -420,33 +565,50 @@ SELECT item_snapshot FROM illegal_items WHERE id = 1;
 
 ### 场景 1: 管理员自查
 
-管理员持有可疑物品，想知道是否合法：
+手持可疑物品，执行：
 
 ```
-/is item check
+/is check item
 ```
 
 ### 场景 2: 新玩家加入时自动扫描
 
-配置中开启 `online_player_scan_on_join: true`（默认开启），玩家加入后 5 秒自动扫描。
+配置中开启 `online_player_scan_on_join: true`（默认开启），玩家加入后自动扫描。
+
+也可用监测引擎持续监控：
+
+```
+/is monitor enable
+/is config monitor interval 10
+```
 
 ### 场景 3: 定期全服扫描
-
-设置定时任务（如通过 Cron 或其他插件），每小时执行一次：
 
 ```
 /is scan full
 ```
 
+查看扫描进度：
+
+```
+/is view scan
+```
+
 ### 场景 4: 发现非法物品后处理
 
-1. 查看报告：`/is report`
-2. 查看详情：`/is report detail <ID>`
-3. 根据 `location_type` 定位物品：
+1. **GUI 查看**: `/is view chunk` 或 `/is view player <名字>`
+2. **文本报告**: `/is report chunk` 或 `/is report player <名字>`
+3. **定位物品**:
    - `PLAYER` → 找到对应玩家，手动清除其背包
-   - `BLOCK` → 传送到坐标，打开对应容器清除
+   - `BLOCK` → 传送至坐标，打开对应容器清除
    - `ENTITY` → 找到展示框/盔甲架，破坏或清除物品
-4. 清除后，管理员可以在数据库中标记 `resolved = 1`
+4. **获取物品**: `/is give <item_hash>` 可生成指定物品副本用于核验
+5. **加入白名单**: 如果确认某物品/玩家/区域合法：
+   ```
+   /is whitelist item add         # 手持物品加入白名单
+   /is whitelist player add <名>  # 玩家加入白名单
+   /is whitelist chunk add        # 区块加入白名单
+   ```
 
 ### 场景 5: 只关心 ILLEGAL 不关心 SUSPICIOUS
 
@@ -459,11 +621,18 @@ alerts:
 
 ### 场景 6: 服务器用插件给物品添加了 lore（允许 lore）
 
-在 `config.yml` 中关闭 lore 检查：
+在 `config.yml` 中关闭:
 
 ```yaml
 validation:
   flag_lore_presence: false
+```
+
+或通过命令：
+
+```
+/is config rules unbreakable disable
+/is config rules attribute mode threshold
 ```
 
 ---
@@ -472,24 +641,31 @@ validation:
 
 ### Q: 插件会影响服务器 TPS 吗？
 
-全量扫描默认每 tick 处理 1 个区块，实测 TPS 影响 < 5%。可通过调整 `full_scan_chunks_per_tick` 控制负载。事件监听中的单物品校验 < 1ms。
+全量扫描默认每 tick 处理 1 个区块，实测 TPS 影响 < 5%。可通过调整 `full_scan_chunks_per_tick` 控制负载。可通过 `/is config scan thread_pool <size>` 调整线程池。事件监听中的单物品校验 < 1ms。
 
 ### Q: 离线玩家的物品怎么扫描？
 
-插件读取 `world/playerdata/<uuid>.dat` 文件中的玩家 NBT 数据，提取背包、末影箱物品。Phase 3 后台执行，不阻塞主线程。
+插件读取 `world/playerdata/<uuid>.dat` 文件中的玩家 NBT 数据，提取背包、末影箱物品。Phase 3 在后台执行不阻塞主线程，也可通过 `/is scan player -offline <玩家名>` 按需扫描。
 
 ### Q: 物品快照能用于恢复物品吗？
 
-可以。`item_snapshot` 字段包含 Base64 编码的完整 NBT 数据，通过 `ItemStack.deserializeBytes()` 可以完整还原物品，包括所有附魔、属性、名称、lore 等。
+可以。`item_snapshot` 字段包含 JSON 格式的完整物品数据（含 Base64 NBT），通过 `/is give <item_hash>` 可完整还原物品，包括所有附魔、属性、名称、lore 等。
 
 ### Q: 如果服务器允许某些"超标"物品（比如某些插件赋予的），如何避免误报？
 
-在 `config.yml` 中调整对应设置。例如：
-- 允许更高等级的附魔 → 调高或关闭 `enforce_max_levels`
-- 允许 lore → 设置 `flag_lore_presence: false`
+方式一：通过 `/is config rules ...` 动态调整规则
+方式二：通过 `/is whitelist item add` 将特定物品加入白名单
+方式三：通过 `/is whitelist player add <玩家名>` 跳过特定玩家
+方式四：通过 `/is watchlist add <Material>` 反向仅监控特定物品
+
+### Q: 监控列表和物品白名单有什么区别？
+
+- **物品白名单**: 特定 hash 的物品完全跳过检查
+- **监控列表**: 仅按 Material 类型标记（如所有 `NETHERITE_SWORD`），无论 NBT 如何都会被扫描并标记，用于追踪特定物品的分布
+
 ### Q: 数据库会越来越大吗？
 
-定期执行 `/is db vacuum` 可以压缩数据库。建议配合定期任务（如每天一次）自动清理。
+定期执行数据库清理（通过 `/is config monitor retention <天数>` 设置自动保留期）。手动清理可通过 SQLite 工具操作。
 
 ### Q: 支持哪些 Minecraft 版本？
 

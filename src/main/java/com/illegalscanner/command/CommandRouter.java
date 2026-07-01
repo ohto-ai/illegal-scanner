@@ -180,11 +180,12 @@ public class CommandRouter implements CommandExecutor {
         sender.sendMessage("§e  world: /is scan world [世界名|all_world] [loaded_chunks|unloaded_chunks|all_chunks] §7(默认: 当前世界, loaded_chunks)");
         sender.sendMessage("§e/is check <item|player|chunk> §7— 快速检测不记录");
         sender.sendMessage("§e/is view <chunk|player|area|res|world|full|scan|record|item> §7— GUI 查看");
-        sender.sendMessage("§e/is report <chunk|player|area|res|world|full|scan|record|item> §7— 文本查看");
+        sender.sendMessage("§e/is report <chunk|player|area|res|world|scan|record|item> §7— 文本查看");
         sender.sendMessage("§e/is history <chunk|player> §7— 历史记录");
         sender.sendMessage("§e/is monitor <enable|disable|status> §7— 实时监测");
         sender.sendMessage("§e/is config <reload|list|rules|monitor|scan> §7— 配置管理");
         sender.sendMessage("§e/is whitelist <player|item|chunk|area|res|world> §7— 白名单");
+        sender.sendMessage("§e/is watchlist <add|remove|list|clear> §7— 监控列表");
         sender.sendMessage("§e/is give <item_hash> §7— 获取物品");
         sender.sendMessage("§e/is reload §7— 重载配置");
         sender.sendMessage("§e/is status §7— 查看状态");

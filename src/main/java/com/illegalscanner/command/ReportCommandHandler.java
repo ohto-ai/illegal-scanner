@@ -13,7 +13,7 @@ import java.util.Date;
 import java.util.List;
 
 /**
- * Handles /is report <chunk|player|area|res|world|full|scan|record|item> (text output).
+ * Handles /is report <chunk|player|area|res|world|scan|record|item> (text output).
  * All reports use pagination format: << Page N / M >>
  */
 public class ReportCommandHandler implements SubCommandHandler {
@@ -32,7 +32,7 @@ public class ReportCommandHandler implements SubCommandHandler {
             sender.sendMessage("§cNo permission."); return true;
         }
         if (args.length < 1) {
-            sender.sendMessage("§e/is report <chunk|player|area|res|world|full|scan|record|item>");
+            sender.sendMessage("§e/is report <chunk|player|area|res|world|scan|record|item>");
             return true;
         }
         return switch (args[0].toLowerCase()) {

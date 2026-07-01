@@ -61,7 +61,7 @@ public final class IllegalScanner extends JavaPlugin {
         getLogger().info("   _|    _|  _|  _|_|_|_|  _|    _|  _|    _|  _|                      ");
         getLogger().info("   _|    _|  _|  _|        _|    _|  _|    _|  _|                      ");
         getLogger().info(" _|_|_|  _|  _|    _|_|_|    _|_|_|    _|_|_|  _|                      ");
-        getLogger().info("                                  _|                                   ");
+        getLogger().info("                                 _|                                    ");
         getLogger().info("   _|_|_|                    _|_|                                      ");
         getLogger().info(" _|          _|_|_|    _|_|_|  _|_|_|    _|_|_|      _|_|    _|  _|_|  ");
         getLogger().info("   _|_|    _|        _|    _|  _|    _|  _|    _|  _|_|_|_|  _|_|      ");

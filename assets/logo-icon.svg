@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#e74c3c"/>
+      <stop offset="25%"  stop-color="#f39c12"/>
+      <stop offset="50%"  stop-color="#f1c40f"/>
+      <stop offset="75%"  stop-color="#f39c12"/>
+      <stop offset="100%" stop-color="#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#d0d0d0"/>
+      <stop offset="30%"  stop-color="#f8f8f8"/>
+      <stop offset="60%"  stop-color="#b0b0b0"/>
+      <stop offset="100%" stop-color="#909090"/>
+    </linearGradient>
+    <radialGradient id="lensTint" cx="0.4" cy="0.35" r="0.65">
+      <stop offset="0%"   stop-color="#3498db" stop-opacity="0.12"/>
+      <stop offset="60%"  stop-color="#9b59b6" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#e74c3c" stop-opacity="0.18"/>
+    </radialGradient>
+    <filter id="redGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="subtleGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="2" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <circle cx="256" cy="256" r="248" fill="url(#bgGrad)" filter="url(#dropShadow)"/>
+
+  <!-- Severity ring -->
+  <circle cx="256" cy="256" r="240" fill="none" stroke="url(#ringGrad)" stroke-width="6"/>
+
+  <!-- Inner border -->
+  <circle cx="256" cy="256" r="228" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="1.5"/>
+
+  <!-- Radar rings -->
+  <circle cx="256" cy="256" r="80"  fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1.5" stroke-dasharray="6 14"/>
+  <circle cx="256" cy="256" r="145" fill="none" stroke="#ffffff" stroke-opacity="0.04" stroke-width="1" stroke-dasharray="3 18"/>
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#ffffff" stroke-opacity="0.02" stroke-width="1"/>
+
+  <!-- Crosshair -->
+  <line x1="40"  y1="256" x2="126" y2="256" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1.5"/>
+  <line x1="386" y1="256" x2="472" y2="256" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1.5"/>
+  <line x1="256" y1="40"  x2="256" y2="126" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1.5"/>
+  <line x1="256" y1="386" x2="256" y2="472" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1.5"/>
+
+  <!-- Magnifying glass -->
+  <g filter="url(#dropShadow)">
+    <!-- Handle -->
+    <g transform="rotate(45, 256, 256)">
+      <rect x="340" y="246" width="100" height="28" rx="14" fill="url(#metal)"/>
+      <line x1="362" y1="248" x2="362" y2="272" stroke="#999" stroke-width="2" stroke-opacity="0.4"/>
+      <line x1="374" y1="248" x2="374" y2="272" stroke="#999" stroke-width="2" stroke-opacity="0.4"/>
+      <line x1="386" y1="248" x2="386" y2="272" stroke="#999" stroke-width="2" stroke-opacity="0.4"/>
+      <line x1="398" y1="248" x2="398" y2="272" stroke="#999" stroke-width="2" stroke-opacity="0.4"/>
+      <line x1="410" y1="248" x2="410" y2="272" stroke="#999" stroke-width="2" stroke-opacity="0.4"/>
+      <line x1="422" y1="248" x2="422" y2="272" stroke="#999" stroke-width="2" stroke-opacity="0.4"/>
+      <!-- Bracket -->
+      <rect x="322" y="237" width="24" height="46" rx="6" fill="url(#metal)"/>
+      <rect x="324" y="239" width="20" height="42" rx="4" fill="#c5c5c5"/>
+    </g>
+
+    <!-- Lens rim -->
+    <circle cx="256" cy="256" r="98" fill="url(#metal)"/>
+    <circle cx="256" cy="256" r="90" fill="none" stroke="#888" stroke-width="2.5"/>
+    <!-- Lens glass -->
+    <circle cx="256" cy="256" r="88" fill="url(#lensTint)"/>
+
+    <!-- Lens shine -->
+    <ellipse cx="226" cy="216" rx="40" ry="26" fill="#ffffff" fill-opacity="0.07" transform="rotate(-35, 226, 216)"/>
+    <ellipse cx="228" cy="214" rx="25" ry="12" fill="#ffffff" fill-opacity="0.05" transform="rotate(-35, 228, 214)"/>
+  </g>
+
+  <!-- Minecraft diamond/gem -->
+  <polygon points="256,208 292,250 256,292 220,250"
+           fill="#e74c3c" opacity="0.85" filter="url(#redGlow)"/>
+  <!-- Gem highlight -->
+  <polygon points="256,216 284,250 256,284 228,250"
+           fill="#ff6b6b" opacity="0.35"/>
+
+  <!-- Prohibition circle-slash -->
+  <circle cx="256" cy="250" r="38" fill="none" stroke="#ff3333" stroke-width="6"
+          stroke-linecap="round" filter="url(#subtleGlow)"/>
+  <line x1="229" y1="223" x2="283" y2="277" stroke="#ff3333" stroke-width="6"
+        stroke-linecap="round" filter="url(#subtleGlow)"/>
+
+  <!-- Yellow warning badge -->
+  <circle cx="330" cy="192" r="16" fill="#f39c12" filter="url(#subtleGlow)"/>
+  <circle cx="330" cy="192" r="14" fill="#f1c40f"/>
+  <text x="330" y="198" text-anchor="middle"
+        font-family="'Segoe UI', Arial, Helvetica, sans-serif"
+        font-weight="900" font-size="19" fill="#1a1a2e">!</text>
+</svg>

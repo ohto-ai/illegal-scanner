@@ -1,6 +1,7 @@
 package com.illegalscanner.command;
 
 import com.illegalscanner.IllegalScanner;
+import com.illegalscanner.monitor.MonitorEventType;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -8,6 +9,7 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class ISTabCompleter implements TabCompleter {
@@ -28,6 +30,19 @@ public class ISTabCompleter implements TabCompleter {
     private static final List<String> CONFIG_SUB = List.of("reload", "list", "rules", "monitor", "scan");
     private static final List<String> WL_TYPES = List.of("player", "item", "chunk", "area", "res", "world");
     private static final List<String> WL_ACTIONS = List.of("add", "remove", "list", "clear");
+
+    // --- Config sub-tree constants ---
+    private static final List<String> CONFIG_RULES = List.of("enchant", "potion", "stack", "attribute", "unbreakable");
+    private static final List<String> CONFIG_ENCHANT_SUB = List.of("conflict", "level", "compatibility");
+    private static final List<String> CONFIG_POTION_SUB = List.of("enable", "disable", "status", "level", "effects");
+    private static final List<String> CONFIG_POTION_LEVEL_SUB = List.of("set", "reset", "list");
+    private static final List<String> CONFIG_STACK_SUB = List.of("enable", "disable", "status", "auto_fix", "set", "reset", "default", "list");
+    private static final List<String> CONFIG_ATTRIBUTE_SUB = List.of("enable", "disable", "status", "mode", "set", "reset", "list");
+    private static final List<String> CONFIG_UNBREAKABLE_SUB = List.of("enable", "disable", "status", "action", "restore");
+    private static final List<String> CONFIG_MONITOR_SUB = List.of("enable", "disable", "status", "interval", "flush", "retention", "events");
+    private static final List<String> CONFIG_MONITOR_EVENTS_SUB = List.of("list", "enable", "disable");
+    private static final List<String> CONFIG_SCAN_SUB = List.of("max_area", "thread_pool", "console_only");
+    private static final List<String> TOGGLE_ACTIONS = List.of("enable", "disable", "status");
 
     public ISTabCompleter(IllegalScanner plugin) {
         this.plugin = plugin;
@@ -69,6 +84,7 @@ public class ISTabCompleter implements TabCompleter {
             case "view" -> completeView(args);
             case "report" -> completeReport(args);
             case "history" -> completeHistory(args);
+            case "config" -> completeConfig(args);
             case "whitelist" -> completeWhitelist(args, partial);
             case "watchlist" -> completeWatchlist(args, partial);
             default -> out;
@@ -123,7 +139,9 @@ public class ISTabCompleter implements TabCompleter {
         if (sub.equals("player") && args.length == 3) return onlinePlayerNames(partial);
         if (sub.equals("world") && args.length == 3) return worldNames(partial);
         if (sub.equals("res") && args.length == 3) return plugin.getRegionWhitelistManager().getAvailablePlugins().stream().filter(p -> p.toLowerCase().startsWith(partial)).toList();
+        if (sub.equals("res") && args.length == 4) return worldNames(partial);
         if (sub.equals("record") && args.length == 3) return List.of("SCAN", "MONITOR");
+        if (sub.equals("area") && args.length == 6) return worldNames(partial);
         return List.of();
     }
 
@@ -131,7 +149,10 @@ public class ISTabCompleter implements TabCompleter {
         String sub = args[1].toLowerCase();
         String partial = args.length >= 3 ? args[args.length - 1].toLowerCase() : "";
         if (sub.equals("player") && args.length == 3) return onlinePlayerNames(partial);
+        if (sub.equals("world") && args.length == 3) return worldNames(partial);
         if (sub.equals("record") && args.length == 3) return List.of("SCAN", "MONITOR");
+        if (sub.equals("area") && args.length == 6) return worldNames(partial);
+        if (sub.equals("res") && args.length == 5) return worldNames(partial);
         return List.of();
     }
 
@@ -153,9 +174,139 @@ public class ISTabCompleter implements TabCompleter {
             String action = args[2].toLowerCase();
             if (type.equals("player") && (action.equals("add") || action.equals("remove")))
                 return onlinePlayerNames(partial);
+            if (type.equals("world") && (action.equals("add") || action.equals("remove")))
+                return worldNames(partial);
             if (type.equals("res") && action.equals("add"))
                 return plugin.getRegionWhitelistManager().getAvailablePlugins().stream().filter(p -> p.toLowerCase().startsWith(partial)).toList();
         }
+        return List.of();
+    }
+
+    private List<String> completeConfig(String[] args) {
+        String sub = args[1].toLowerCase();
+        String partial = args.length >= 3 ? args[args.length - 1].toLowerCase() : "";
+
+        // config <reload|list|rules|monitor|scan> — level 2 is handled by CONFIG_SUB
+        if (args.length == 2) return filter(CONFIG_SUB, partial);
+
+        // Level 3+: route by sub
+        if (args.length == 3) {
+            return switch (sub) {
+                case "rules"   -> filter(CONFIG_RULES, partial);
+                case "monitor" -> filter(CONFIG_MONITOR_SUB, partial);
+                case "scan"    -> filter(CONFIG_SCAN_SUB, partial);
+                default -> List.of();
+            };
+        }
+
+        // Level 4+: depends on rules/monitor/scan sub
+        String subSub = args[2].toLowerCase();
+        String partial4 = args.length >= 4 ? args[args.length - 1].toLowerCase() : "";
+
+        if (sub.equals("rules")) {
+            if (args.length == 4) {
+                return switch (subSub) {
+                    case "enchant"     -> filter(CONFIG_ENCHANT_SUB, partial4);
+                    case "potion"      -> filter(CONFIG_POTION_SUB, partial4);
+                    case "stack"       -> filter(CONFIG_STACK_SUB, partial4);
+                    case "attribute"   -> filter(CONFIG_ATTRIBUTE_SUB, partial4);
+                    case "unbreakable" -> filter(CONFIG_UNBREAKABLE_SUB, partial4);
+                    default -> List.of();
+                };
+            }
+
+            // Level 5+: route rules → enchant/potion/stack/attribute/unbreakable
+            if (args.length == 5) {
+                String enchantSub = args[3].toLowerCase();
+                return switch (subSub) {
+                    case "enchant" -> {
+                        if (enchantSub.equals("level") || enchantSub.equals("compatibility"))
+                            yield filter(TOGGLE_ACTIONS, partial4);
+                        yield List.of();
+                    }
+                    case "potion" -> {
+                        if (enchantSub.equals("level"))
+                            yield filter(CONFIG_POTION_LEVEL_SUB, partial4);
+                        yield List.of();
+                    }
+                    case "stack" -> {
+                        if (enchantSub.equals("auto_fix"))
+                            yield filter(List.of("enable", "disable"), partial4);
+                        yield List.of();
+                    }
+                    case "attribute" -> {
+                        if (enchantSub.equals("mode"))
+                            yield filter(List.of("all", "threshold"), partial4);
+                        yield List.of();
+                    }
+                    case "unbreakable" -> {
+                        if (enchantSub.equals("action"))
+                            yield filter(List.of("remove", "flag"), partial4);
+                        if (enchantSub.equals("restore"))
+                            yield filter(List.of("enable", "disable"), partial4);
+                        yield List.of();
+                    }
+                    default -> List.of();
+                };
+            }
+
+            // Level 6+: deeper arg suggestions (effects max, set/reset values, etc.)
+            if (args.length >= 6) {
+                String enchantSub = args[3].toLowerCase();
+                if (subSub.equals("enchant")) {
+                    if (enchantSub.equals("level")) {
+                        if (args[4].equalsIgnoreCase("set") && args.length == 6)
+                            return enchantNames(partial4);
+                        if (args[4].equalsIgnoreCase("reset") && args.length == 6)
+                            return enchantNames(partial4);
+                    }
+                    if (enchantSub.equals("compatibility")) {
+                        if ((args[4].equalsIgnoreCase("add") || args[4].equalsIgnoreCase("remove")) && args.length == 6)
+                            return enchantNames(partial4);
+                        if ((args[4].equalsIgnoreCase("add") || args[4].equalsIgnoreCase("remove")) && args.length == 7)
+                            return materialNames(partial4);
+                    }
+                }
+                if (subSub.equals("potion") && enchantSub.equals("level")) {
+                    if (args[4].equalsIgnoreCase("set") && args.length == 6)
+                        return potionEffectNames(partial4);
+                    if (args[4].equalsIgnoreCase("reset") && args.length == 6)
+                        return potionEffectNames(partial4);
+                }
+                if (subSub.equals("stack")) {
+                    if (args[4].equalsIgnoreCase("set") && args.length == 6)
+                        return materialNames(partial4);
+                    if (args[4].equalsIgnoreCase("reset") && args.length == 6)
+                        return materialNames(partial4);
+                }
+                if (subSub.equals("attribute")) {
+                    if (args[4].equalsIgnoreCase("set") && args.length == 6)
+                        return attributeNames(partial4);
+                    if (args[4].equalsIgnoreCase("reset") && args.length == 6)
+                        return attributeNames(partial4);
+                }
+                return List.of();
+            }
+            return List.of();
+        }
+
+        if (sub.equals("monitor")) {
+            if (args.length == 4 && subSub.equals("events"))
+                return filter(CONFIG_MONITOR_EVENTS_SUB, partial4);
+            if (args.length == 5 && subSub.equals("events")) {
+                String eventAction = args[3].toLowerCase();
+                if (eventAction.equals("enable") || eventAction.equals("disable"))
+                    return monitorEventNames(partial4);
+            }
+            return List.of();
+        }
+
+        if (sub.equals("scan")) {
+            if (args.length == 4 && subSub.equals("console_only"))
+                return filter(List.of("enable", "disable"), partial4);
+            return List.of();
+        }
+
         return List.of();
     }
 
@@ -164,11 +315,10 @@ public class ISTabCompleter implements TabCompleter {
     }
 
     private List<String> completeWatchlist(String[] args, String partial) {
-        if (args.length == 3) {
-            String action = args[2].toLowerCase();
-            if (action.equals("add") || action.equals("remove")) {
-                return materialNames(partial);
-            }
+        // args[1] is the action (add/remove/list/clear), args[2] is the material being typed
+        String action = args.length >= 2 ? args[1].toLowerCase() : "";
+        if (args.length == 3 && (action.equals("add") || action.equals("remove"))) {
+            return materialNames(partial);
         }
         return List.of();
     }
@@ -192,6 +342,45 @@ public class ISTabCompleter implements TabCompleter {
                 .filter(m -> m.isItem() && m.name().startsWith(upper))
                 .limit(50)
                 .map(org.bukkit.Material::name)
+                .toList();
+    }
+
+    /** Tab-complete Enchantment names, limited to 50 matches. */
+    private List<String> enchantNames(String partial) {
+        String upper = partial.toUpperCase();
+        return Arrays.stream(org.bukkit.enchantments.Enchantment.values())
+                .map(e -> e.getKey().getKey())
+                .filter(k -> k.toUpperCase().startsWith(upper))
+                .limit(50)
+                .toList();
+    }
+
+    /** Tab-complete PotionEffectType names, limited to 50 matches. */
+    private List<String> potionEffectNames(String partial) {
+        String upper = partial.toUpperCase();
+        return Arrays.stream(org.bukkit.potion.PotionEffectType.values())
+                .map(org.bukkit.potion.PotionEffectType::getName)
+                .filter(n -> n != null && n.toUpperCase().startsWith(upper))
+                .limit(50)
+                .toList();
+    }
+
+    /** Tab-complete Attribute names, limited to 50 matches. */
+    private List<String> attributeNames(String partial) {
+        String upper = partial.toUpperCase();
+        return Arrays.stream(org.bukkit.attribute.Attribute.values())
+                .map(org.bukkit.attribute.Attribute::name)
+                .filter(n -> n.startsWith(upper))
+                .limit(50)
+                .toList();
+    }
+
+    /** Tab-complete MonitorEventType names. */
+    private List<String> monitorEventNames(String partial) {
+        String upper = partial.toUpperCase();
+        return Arrays.stream(MonitorEventType.values())
+                .map(MonitorEventType::name)
+                .filter(n -> n.startsWith(upper))
                 .toList();
     }
 }
