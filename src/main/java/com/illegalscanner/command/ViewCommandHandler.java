@@ -32,8 +32,8 @@ public class ViewCommandHandler implements SubCommandHandler {
     static final int GUI_SIZE = 54;
     public static final int PAGE_SIZE = 45;
 
-    /** Auto-refresh state for scan session detail views. */
-    private record RefreshState(int sessionId, BukkitTask task) {}
+    /** Auto-refresh state for views (scan sessions, chunk/player rescans, etc.). */
+    private record RefreshState(int sessionId, ViewType viewType, BukkitTask task) {}
     private final Map<UUID, RefreshState> autoRefresh = new HashMap<>();
 
     /** Interval in ticks for auto-refresh (3 seconds = 60 ticks). */
@@ -1271,10 +1271,26 @@ public class ViewCommandHandler implements SubCommandHandler {
         return sender.hasPermission("illegalscanner.report");
     }
 
-    // ==================== Auto-Refresh for Scan Session View ====================
+    // ==================== Auto-Refresh ====================
 
-    /** Start auto-refreshing the scan session view for a player. */
+    /**
+     * Start auto-refreshing the scan session view for a player.
+     * Checks every {@link #REFRESH_INTERVAL_TICKS} ticks and reopens the view
+     * if the session is still active. Stops when the session completes or the
+     * player navigates away.
+     */
     void startAutoRefresh(Player p, int sessionId) {
+        startAutoRefresh(p, sessionId, ViewType.SCAN);
+    }
+
+    /**
+     * Start auto-refreshing a view of the given type.
+     *
+     * @param p         the player
+     * @param sessionId session ID (for SCAN type) or 0 (for CHUNK/PLAYER/etc.)
+     * @param viewType  the view type to refresh
+     */
+    private void startAutoRefresh(Player p, int sessionId, ViewType viewType) {
         stopAutoRefresh(p);
         UUID uuid = p.getUniqueId();
 
@@ -1283,27 +1299,62 @@ public class ViewCommandHandler implements SubCommandHandler {
                 stopAutoRefresh(p);
                 return;
             }
-            // Verify player is still viewing this scan session
+            // Verify player is still viewing the same view type
             var topInv = p.getOpenInventory().getTopInventory();
             if (!(topInv.getHolder() instanceof ViewGuiHolder holder)
-                    || holder.type != ViewType.SCAN
-                    || !holder.context.equals(String.valueOf(sessionId))) {
+                    || holder.type != viewType) {
                 stopAutoRefresh(p);
                 return;
             }
-            // Check if session is still active
-            String currentStatus = plugin.getScanService().getSessionStatus(sessionId);
-            if (!"RUNNING".equals(currentStatus) && !"PAUSED".equals(currentStatus)) {
-                stopAutoRefresh(p);
-                // Show final state
-                openScanView(p, sessionId, 1, holder.back);
-                return;
+
+            // For SCAN views, verify context matches the expected session
+            if (viewType == ViewType.SCAN) {
+                if (!holder.context.equals(String.valueOf(sessionId))) {
+                    stopAutoRefresh(p);
+                    return;
+                }
+                // Check if session is still active; if not, show final state and stop
+                String currentStatus = plugin.getScanService().getSessionStatus(sessionId);
+                if (!"RUNNING".equals(currentStatus) && !"PAUSED".equals(currentStatus)) {
+                    stopAutoRefresh(p);
+                    openScanView(p, sessionId, 1, holder.back);
+                    return;
+                }
             }
-            // Refresh in-place
-            openScanView(p, sessionId, 1, holder.back);
+
+            // Reopen the view in-place, preserving page and navigation history
+            reopenView(p, holder);
         }, REFRESH_INTERVAL_TICKS, REFRESH_INTERVAL_TICKS);
 
-        autoRefresh.put(uuid, new RefreshState(sessionId, task));
+        autoRefresh.put(uuid, new RefreshState(sessionId, viewType, task));
+    }
+
+    /**
+     * Reopen the view a player is currently looking at, preserving page number
+     * and back-navigation history. Dispatches on holder.type.
+     */
+    private void reopenView(Player p, ViewGuiHolder holder) {
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            switch (holder.type) {
+                case SCAN -> openScanView(p, Integer.parseInt(holder.context), holder.page, holder.back);
+                case CHUNK -> {
+                    String[] parts = holder.context.split("/");
+                    if (parts.length >= 3) {
+                        openChunkView(p, parts[0], Integer.parseInt(parts[1]),
+                                Integer.parseInt(parts[2]), holder.page, holder.back);
+                    }
+                }
+                case PLAYER -> {
+                    String puid = holder.context;
+                    org.bukkit.OfflinePlayer offline = plugin.getServer().getOfflinePlayer(
+                            java.util.UUID.fromString(puid));
+                    String pname = offline.getName() != null ? offline.getName() : puid;
+                    openPlayerView(p, pname, holder.page, holder.back);
+                }
+                // Other view types don't need auto-refresh (static data)
+                default -> {}
+            }
+        });
     }
 
     /** Stop auto-refreshing for a player. Safe to call even if no refresh is active. */

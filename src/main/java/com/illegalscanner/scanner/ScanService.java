@@ -145,6 +145,63 @@ public class ScanService {
         return flagged;
     }
 
+    // ==================== Force Scan (bypass dedup) ====================
+
+    /**
+     * Scan a chunk bypassing the dedup cache. Used for explicit user-initiated
+     * rescans from the GUI. Attempts synchronous chunk load if needed.
+     *
+     * @param world  the world containing the chunk (from context, not player)
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     * @return number of items flagged, or -1 if the chunk could not be loaded
+     */
+    public int forceScanChunk(World world, int chunkX, int chunkZ) {
+        Chunk chunk = world.getChunkAt(chunkX, chunkZ);
+        if (!chunk.isLoaded()) {
+            // Synchronous load — may cause brief tick lag for large region files
+            chunk.load(true);
+        }
+        if (!chunk.isLoaded()) {
+            plugin.getLogger().warning("forceScanChunk: failed to load chunk "
+                    + world.getName() + " " + chunkX + "," + chunkZ);
+            return -1;
+        }
+        int result = scanChunkInternal(chunk, "chunk", 0);
+        dedupCache.markScanned(world.getName(), chunkX, chunkZ, System.currentTimeMillis());
+        return result;
+    }
+
+    /**
+     * Scan a player by UUID, bypassing name-based resolution. Used for explicit
+     * user-initiated rescans from the player view GUI.
+     *
+     * @param playerUuid the player's UUID (from holder.context)
+     * @param playerName cached player name for display
+     * @return number of items flagged, or -1 if player data could not be found
+     */
+    public int forceScanPlayer(java.util.UUID playerUuid, String playerName) {
+        // Try online player first (UUID-based, exact match)
+        Player online = plugin.getServer().getPlayer(playerUuid);
+        if (online != null && online.isOnline()) {
+            return scanOnlinePlayer(online, "player", 0);
+        }
+
+        // Try offline player
+        org.bukkit.OfflinePlayer offline = plugin.getServer().getOfflinePlayer(playerUuid);
+        if (offline.getName() != null && offline.hasPlayedBefore()) {
+            plugin.getDatabaseManager().deleteMonitorRecordsByPlayer(playerUuid.toString());
+            return playerScanner.scanOfflinePlayer(offline,
+                    (item, slot, container, loc, violations, severity) -> {
+                        recordViolation(item, slot, container, loc, violations, severity,
+                                "player", 0, playerUuid.toString(), playerName);
+                    });
+        }
+
+        plugin.getLogger().warning("forceScanPlayer: player not found: " + playerUuid);
+        return -1;
+    }
+
     // ==================== Player Scan ====================
 
     public int scanPlayer(String playerName) {

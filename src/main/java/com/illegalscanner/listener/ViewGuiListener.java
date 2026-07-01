@@ -117,10 +117,9 @@ public class ViewGuiListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (!(event.getInventory().getHolder() instanceof ViewGuiHolder holder)) return;
-        if (holder.type != ViewType.SCAN) return;
+        if (!(event.getInventory().getHolder() instanceof ViewGuiHolder)) return;
         if (!(event.getPlayer() instanceof Player player)) return;
-        // Stop auto-refresh when scan session detail view is closed
+        // Stop auto-refresh for any view type (idempotent — no-op if no active task)
         plugin.getCommandRouter().getViewHandler().stopAutoRefresh(player);
     }
 
@@ -131,41 +130,79 @@ public class ViewGuiListener implements Listener {
     }
 
     private void handlePlayerRescan(Player player, ViewGuiHolder holder) {
-        String playerUuid = holder.context;
-        java.util.UUID uuid = java.util.UUID.fromString(playerUuid);
+        java.util.UUID uuid;
+        try {
+            uuid = java.util.UUID.fromString(holder.context);
+        } catch (IllegalArgumentException e) {
+            player.sendMessage("§c无效的玩家信息");
+            return;
+        }
+
         org.bukkit.OfflinePlayer offline = org.bukkit.Bukkit.getOfflinePlayer(uuid);
-        String playerName = offline.getName() != null ? offline.getName() : playerUuid;
+        String playerName = offline.getName() != null ? offline.getName() : holder.context;
 
         player.sendMessage("§e正在重新扫描玩家 " + playerName + "...");
 
-        // Use ScanService.scanPlayer which handles online/offline + record saving
-        plugin.getServer().getScheduler().runTask(plugin, () -> {
-            int flagged = plugin.getScanService().scanPlayer(playerName);
-            player.sendMessage("§a重新扫描完成: 发现 " + flagged + " 个违规物品。");
+        ViewCommandHandler vh = plugin.getCommandRouter().getViewHandler();
 
-            // Reopen the player view with same page and back
-            ViewCommandHandler vh = plugin.getCommandRouter().getViewHandler();
+        // Run scan on main thread (scanPlayer is synchronous)
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            int flagged = plugin.getScanService().forceScanPlayer(uuid, playerName);
+
+            if (flagged >= 0) {
+                player.sendMessage("§a玩家扫描完成: 发现 " + flagged + " 个违规物品。");
+            } else {
+                player.sendMessage("§c玩家 " + playerName + " 扫描失败（未找到玩家数据）");
+                return; // Do not reopen on failure
+            }
+
+            // Reopen the player view preserving current page
             plugin.getServer().getScheduler().runTask(plugin, () ->
-                vh.openPlayerView(player, playerName, 1, holder.back));
+                vh.openPlayerView(player, playerName, holder.page, holder.back));
         });
     }
 
     private void handleRescan(Player player, ViewGuiHolder holder) {
-        // Parse chunk coordinates from context
+        // Parse chunk coordinates from context (format: "world/cx/cz")
         String[] parts = holder.context.split("/");
-        if (parts.length < 3) return;
-        String world = parts[0];
-        int cx = Integer.parseInt(parts[1]);
-        int cz = Integer.parseInt(parts[2]);
+        if (parts.length < 3) {
+            player.sendMessage("§c无效的区块信息");
+            return;
+        }
+        String worldName = parts[0];
+        int cx, cz;
+        try {
+            cx = Integer.parseInt(parts[1]);
+            cz = Integer.parseInt(parts[2]);
+        } catch (NumberFormatException e) {
+            player.sendMessage("§c无效的区块坐标");
+            return;
+        }
+
+        World world = org.bukkit.Bukkit.getWorld(worldName);
+        if (world == null) {
+            player.sendMessage("§c世界 " + worldName + " 未找到");
+            return;
+        }
 
         player.sendMessage("§e正在重新扫描区块 (" + cx + "," + cz + ")...");
-        // Run scan on main thread
+
+        ViewCommandHandler vh = plugin.getCommandRouter().getViewHandler();
+
+        // Run scan on main thread (scanChunk is synchronous)
         plugin.getServer().getScheduler().runTask(plugin, () -> {
-            plugin.getScanService().scanChunk(player.getWorld(), cx, cz, System.currentTimeMillis());
-            // Reopen the chunk view with same page and back
-            ViewCommandHandler vh = plugin.getCommandRouter().getViewHandler();
+            int flagged = plugin.getScanService().forceScanChunk(world, cx, cz);
+
+            if (flagged >= 0) {
+                player.sendMessage("§a区块扫描完成: 发现 " + flagged + " 个违规物品。");
+            } else {
+                player.sendMessage("§c区块 (" + cx + "," + cz + ") 无法加载，扫描失败");
+                return; // Do not reopen on failure
+            }
+
+            // Reopen chunk view preserving current page and navigation history
             plugin.getServer().getScheduler().runTask(plugin, () ->
-                vh.openChunkView(player, world, cx, cz, 1, holder.back));
+                vh.openChunkView(player, worldName, cx, cz, holder.page, holder.back));
         });
     }
 
