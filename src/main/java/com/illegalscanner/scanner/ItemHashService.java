@@ -74,7 +74,10 @@ public final class ItemHashService {
         if (hash == null) return null;
 
         // Ensure item_index has this hash (async fire-and-forget)
-        String snapshot = NbtUtil.itemStackToJson(item);
+        // Normalize amount to 1 so the stored snapshot is stack-size independent
+        ItemStack normalized = item.clone();
+        normalized.setAmount(1);
+        String snapshot = NbtUtil.itemStackToJson(normalized);
         plugin.getDatabaseManager().ensureItemIndexed(hash, item.getType().name(), snapshot);
 
         return hash;
@@ -88,8 +91,9 @@ public final class ItemHashService {
      * To exclude durability, we create a copy with max durability and serialize that.
      */
     private byte[] serializeForHashing(ItemStack item) {
-        // Create a copy and repair durability
+        // Create a copy, normalize amount to 1, and repair durability
         ItemStack copy = item.clone();
+        copy.setAmount(1);
         if (copy.getItemMeta() instanceof org.bukkit.inventory.meta.Damageable dmg) {
             dmg.setDamage(0);
             copy.setItemMeta((org.bukkit.inventory.meta.ItemMeta) dmg);
