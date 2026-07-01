@@ -511,6 +511,28 @@ public class DatabaseManager {
     }
 
     /**
+     * Delete ALL scan records for a chunk. Called before re-scan to make scan results
+     * authoritative — the new scan replaces all old scan state for this chunk.
+     * No CLEAN markers are needed; empty chunk simply has no records after scan.
+     */
+    public void deleteScanRecordsByChunk(String world, int chunkX, int chunkZ) {
+        String sql = "DELETE FROM scan_records WHERE world = ? AND chunk_x = ? AND chunk_z = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, world);
+            ps.setInt(2, chunkX);
+            ps.setInt(3, chunkZ);
+            int deleted = ps.executeUpdate();
+            if (deleted > 0) {
+                plugin.getLogger().fine("Cleaned " + deleted + " old scan records for chunk: "
+                        + world + "(" + chunkX + "," + chunkZ + ")");
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().log(Level.SEVERE, "Failed to delete scan records for chunk: "
+                    + world + "(" + chunkX + "," + chunkZ + ")", e);
+        }
+    }
+
+    /**
      * Delete ALL monitor records for a player. Called before player scan to make scan
      * results authoritative — the scan replaces all old monitor state for this player.
      */

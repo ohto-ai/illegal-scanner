@@ -85,7 +85,8 @@ public class ScanService {
 
     /**
      * Scan a chunk and record results under a session.
-     * Cleans old monitor records for this chunk before scanning — scan is authoritative.
+     * Deletes old monitor AND scan records for this chunk before scanning —
+     * the new scan result is the sole source of truth for this chunk.
      * @return number of items flagged
      */
     private int scanChunkInternal(Chunk chunk, String scanType, int sessionId) {
@@ -93,68 +94,38 @@ public class ScanService {
         int cx = chunk.getX();
         int cz = chunk.getZ();
 
-        // Clean old monitor records — scan replaces all previous monitor state for this chunk
+        // Delete old records — new scan is authoritative for this chunk
         plugin.getDatabaseManager().deleteMonitorRecordsByChunk(worldName, cx, cz);
-
-        // Snapshot old scan item hashes before scanning.
-        // After scan, any old hash not found in current violations gets a CLEAN marker
-        // so the View correctly hides items that are no longer present.
-        java.util.Set<String> oldScanHashes = plugin.getDatabaseManager()
-                .getScanItemHashesByChunk(worldName, cx, cz);
-        java.util.Set<String> currentViolationHashes = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        plugin.getDatabaseManager().deleteScanRecordsByChunk(worldName, cx, cz);
 
         int flagged = chunkScanner.scanChunk(chunk, (item, slot, container, loc, violations, severity) -> {
-            String itemHash = plugin.getItemHashService().resolve(item);
-            if (itemHash != null) {
-                currentViolationHashes.add(itemHash);
-            }
             recordViolation(item, slot, container, loc, violations, severity,
                     scanType, sessionId, null, null);
         });
-
-        // Write CLEAN markers for old items no longer present in this scan
-        if (!oldScanHashes.isEmpty()) {
-            long now = System.currentTimeMillis();
-            Integer sid = sessionId > 0 ? sessionId : null;
-            for (String oldHash : oldScanHashes) {
-                if (!currentViolationHashes.contains(oldHash)) {
-                    // Use "CONTAINER" as non-null placeholder so the record passes
-                    // the SQL filter: container NOT IN ('inventory','armor','offhand','enderchest')
-                    ScanRecord cleanRecord = new ScanRecord(
-                            0, sid, oldHash, scanType,
-                            worldName, cx, cz,
-                            null, null, null, "CONTAINER", null,
-                            "[]", "CLEAN", now);
-                    plugin.getDatabaseManager().insertScanRecord(cleanRecord);
-                }
-            }
-        }
 
         return flagged;
     }
 
     /**
      * Scan containers extracted from raw MCA chunk NBT (no Bukkit Chunk involved).
-     * Validates items, records violations, and writes CLEAN markers — same as
-     * {@link #scanChunkInternal(Chunk, String, int)} but without a loaded chunk.
+     * Deletes old monitor AND scan records for this chunk before scanning —
+     * the new scan result is the sole source of truth for this chunk.
      *
      * @return number of items flagged
      */
     private int scanContainersFromNbt(List<McaChunkReader.ContainerFromNbt> containers,
                                        World world, int cx, int cz,
                                        String scanType, int sessionId) {
+        String worldName = world.getName();
+
+        // Delete old records BEFORE checking containers —
+        // new scan is authoritative for this chunk even if all containers are now empty.
+        plugin.getDatabaseManager().deleteMonitorRecordsByChunk(worldName, cx, cz);
+        plugin.getDatabaseManager().deleteScanRecordsByChunk(worldName, cx, cz);
+
         if (containers.isEmpty()) {
             return 0;
         }
-
-        String worldName = world.getName();
-
-        // Clean old monitor records — scan replaces all previous monitor state for this chunk
-        plugin.getDatabaseManager().deleteMonitorRecordsByChunk(worldName, cx, cz);
-
-        java.util.Set<String> oldScanHashes = plugin.getDatabaseManager()
-                .getScanItemHashesByChunk(worldName, cx, cz);
-        java.util.Set<String> currentViolationHashes = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
         int flagged = 0;
         for (McaChunkReader.ContainerFromNbt container : containers) {
@@ -164,30 +135,9 @@ public class ScanService {
                 List<Violation> violations = plugin.getValidationEngine().validate(item, loc);
                 if (!violations.isEmpty()) {
                     ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
-                    // Hash and record
-                    String itemHash = plugin.getItemHashService().resolve(item);
-                    if (itemHash != null) {
-                        currentViolationHashes.add(itemHash);
-                    }
                     recordViolation(item, slotItem.slot(), container.containerType(), loc,
                             violations, severity, scanType, sessionId, null, null);
                     flagged++;
-                }
-            }
-        }
-
-        // Write CLEAN markers for old items no longer present in this scan
-        if (!oldScanHashes.isEmpty()) {
-            long now = System.currentTimeMillis();
-            Integer sid = sessionId > 0 ? sessionId : null;
-            for (String oldHash : oldScanHashes) {
-                if (!currentViolationHashes.contains(oldHash)) {
-                    ScanRecord cleanRecord = new ScanRecord(
-                            0, sid, oldHash, scanType,
-                            worldName, cx, cz,
-                            null, null, null, "CONTAINER", null,
-                            "[]", "CLEAN", now);
-                    plugin.getDatabaseManager().insertScanRecord(cleanRecord);
                 }
             }
         }
