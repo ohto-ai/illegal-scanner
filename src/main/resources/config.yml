@@ -114,6 +114,14 @@ alerts:
   admin_notify_permission: "illegalscanner.notify"
 
 # ----------------------------------------------------------------------------
+# Watch List — materials that are always flagged regardless of NBT
+# Items matching these material IDs are reported as ILLEGAL unless whitelisted.
+# For items unobtainable in survival (bedrock, spawner, end portal frame, etc.)
+# ----------------------------------------------------------------------------
+watch_materials:
+  - BEDROCK
+
+# ----------------------------------------------------------------------------
 # Materials to completely ignore (creative-only / never flag)
 # ----------------------------------------------------------------------------
 ignore_materials:
@@ -164,3 +172,4 @@ violation_messages:
   CONTAINER_CONTENTS_PRESENT: "Item carries block entity data with items (creative/command only)"
   CONTAINER_EMPTY: "Item has empty block entity data (not survivally obtainable)"
   CONTAINER_LOOT_PRESENT: "Container has loot table data (not survivally obtainable)"
+  WATCH_MATERIAL: "Watch list material {material} (not obtainable in survival)"

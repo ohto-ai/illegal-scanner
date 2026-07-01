@@ -22,6 +22,7 @@ public class CommandRouter implements CommandExecutor {
     private MonitorCommandHandler monitorHandler;
     private ConfigCommandHandler configHandler;
     private WhitelistCommandHandler whitelistHandler;
+    private WatchListCommandHandler watchlistHandler;
 
     public CommandRouter(IllegalScanner plugin) {
         this.plugin = plugin;
@@ -50,6 +51,7 @@ public class CommandRouter implements CommandExecutor {
                 case "monitor"   -> getMonitorHandler().handle(sender, shift(args));
                 case "config"    -> getConfigHandler().handle(sender, shift(args));
                 case "whitelist" -> getWhitelistHandlerInternal().handle(sender, shift(args));
+                case "watchlist" -> getWatchlistHandler().handle(sender, shift(args));
                 // Legacy compatibility + convenience
                 case "give"      -> handleGive(sender, shift(args));
                 case "reload"    -> handleReload(sender);
@@ -103,6 +105,11 @@ public class CommandRouter implements CommandExecutor {
     private WhitelistCommandHandler getWhitelistHandlerInternal() {
         if (whitelistHandler == null) whitelistHandler = new WhitelistCommandHandler(plugin);
         return whitelistHandler;
+    }
+
+    private WatchListCommandHandler getWatchlistHandler() {
+        if (watchlistHandler == null) watchlistHandler = new WatchListCommandHandler(plugin);
+        return watchlistHandler;
     }
 
     /** Expose ViewCommandHandler for GUI navigation callbacks. */

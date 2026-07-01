@@ -16,7 +16,7 @@ public class ISTabCompleter implements TabCompleter {
 
     private static final List<String> MAIN = List.of(
             "scan", "check", "view", "report", "history", "monitor", "config",
-            "whitelist", "give", "reload", "status"
+            "whitelist", "watchlist", "give", "reload", "status"
     );
 
     private static final List<String> SCAN_SUB = List.of("chunk", "player", "area", "res", "world", "full", "pause", "resume", "stop", "restart");
@@ -57,6 +57,7 @@ public class ISTabCompleter implements TabCompleter {
                 case "monitor"   -> filter(MONITOR_SUB, partial);
                 case "config"    -> filter(CONFIG_SUB, partial);
                 case "whitelist" -> filter(WL_TYPES, partial);
+                case "watchlist" -> filter(List.of("add", "remove", "list", "clear"), partial);
                 default -> out;
             };
         }
@@ -69,6 +70,7 @@ public class ISTabCompleter implements TabCompleter {
             case "report" -> completeReport(args);
             case "history" -> completeHistory(args);
             case "whitelist" -> completeWhitelist(args, partial);
+            case "watchlist" -> completeWatchlist(args, partial);
             default -> out;
         };
     }
@@ -161,6 +163,16 @@ public class ISTabCompleter implements TabCompleter {
         return source.stream().filter(s -> s.startsWith(partial)).toList();
     }
 
+    private List<String> completeWatchlist(String[] args, String partial) {
+        if (args.length == 3) {
+            String action = args[2].toLowerCase();
+            if (action.equals("add") || action.equals("remove")) {
+                return materialNames(partial);
+            }
+        }
+        return List.of();
+    }
+
     private List<String> onlinePlayerNames(String partial) {
         return Bukkit.getOnlinePlayers().stream()
                 .map(Player::getName).filter(n -> n.toLowerCase().startsWith(partial)).toList();
@@ -169,5 +181,17 @@ public class ISTabCompleter implements TabCompleter {
     private List<String> worldNames(String partial) {
         return Bukkit.getWorlds().stream()
                 .map(w -> w.getName()).filter(n -> n.toLowerCase().startsWith(partial)).toList();
+    }
+
+    /**
+     * Tab-complete Material names (items only), limited to 50 matches.
+     */
+    private List<String> materialNames(String partial) {
+        String upper = partial.toUpperCase();
+        return java.util.Arrays.stream(org.bukkit.Material.values())
+                .filter(m -> m.isItem() && m.name().startsWith(upper))
+                .limit(50)
+                .map(org.bukkit.Material::name)
+                .toList();
     }
 }

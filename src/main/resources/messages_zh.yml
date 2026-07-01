@@ -125,6 +125,20 @@ alert:
   illegal_entity: "[{entity_type}] 非法物品: {type} 位于 {x},{y},{z} - {count}项违规"
   illegal_player_inv: "非法物品: {type} 在 {player} 的{inventory_type}槽位 {slot} - {count}项违规"
 
+# ---- Watchlist ----
+watchlist:
+  added: "§a已将 {material} 加入关注列表。"
+  removed: "§a已从关注列表移除 {material}。"
+  list_header: "===== 关注列表 ({count} 个) ====="
+  list_entry: "§f- {material}"
+  list_empty: "§a关注列表为空。"
+  cleared: "§a已清空关注列表 ({count} 个)。"
+  already_exists: "§e{material} 已在关注列表中。"
+  not_found: "§c{material} 不在关注列表中。"
+  invalid_material: "§c无效的物品ID: {material}。"
+  not_an_item: "§c{material} 不是有效的物品。"
+  usage: "§e用法: /is watchlist <add|remove|list|clear>"
+
 # ---- Help ----
 help:
   header: "===== illegal-scanner v{version} ====="

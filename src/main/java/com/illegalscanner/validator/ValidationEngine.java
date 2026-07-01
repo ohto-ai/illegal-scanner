@@ -33,6 +33,8 @@ public class ValidationEngine {
         validators.add(new PotionValidator(plugin));
         validators.add(new BookValidator(plugin));
         validators.add(new FireworkValidator(plugin));
+        // WatchListValidator: cheap material-ID check (before heavier NBT validators)
+        validators.add(new WatchListValidator(plugin));
         // ContainerValidator runs last as it triggers recursive validation
         validators.add(new ContainerValidator(plugin));
     }
