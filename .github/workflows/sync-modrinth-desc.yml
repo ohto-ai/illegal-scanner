@@ -1,0 +1,60 @@
+name: Sync Modrinth Description
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'README.md'
+  workflow_dispatch:  # manual trigger for initial sync or retries
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update Modrinth project description from README
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          python3 -c "
+          import json, sys
+          with open('README.md', 'r', encoding='utf-8') as f:
+              body = f.read()
+          data = json.dumps({'body': body})
+          # Validate JSON round-trip
+          json.loads(data)
+          with open('/tmp/body.json', 'w', encoding='utf-8') as out:
+              out.write(data)
+          "
+
+          echo "Sending README to Modrinth project zb39UOk7..."
+
+          HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            -X PATCH "https://api.modrinth.com/v2/project/zb39UOk7" \
+            -H "Authorization: $MODRINTH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: OhtoAi/illegal-scanner (GitHub Actions)" \
+            -d @/tmp/body.json)
+
+          echo "HTTP Status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "✓ Modrinth project description updated successfully."
+          elif [ "$HTTP_CODE" = "401" ]; then
+            echo "✗ Authentication failed. Check that MODRINTH_TOKEN is set and has 'Write Projects' scope."
+            exit 1
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "✗ Project not found. Verify the project ID zb39UOk7 is correct."
+            exit 1
+          else
+            echo "✗ Unexpected response (HTTP $HTTP_CODE):"
+            cat /tmp/response.txt
+            exit 1
+          fi
+
+      # -------------------------------------------------------------------
+      # CurseForge: No write API exists for project descriptions.
+      # Feature request CF-I-6366 has been open since 2024.
+      # You must manually paste the README content into CurseForge's
+      # project description editor.
+      # -------------------------------------------------------------------

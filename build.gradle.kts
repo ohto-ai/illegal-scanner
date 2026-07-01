@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.illegalscanner"
-version = "1.0.0"
+version = project.findProperty("plugin_version")?.toString() ?: "0.0.0"
 description = "illegal-scanner - Detect illegal/overpowered items in Minecraft"
 
 java {

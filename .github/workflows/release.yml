@@ -1,0 +1,198 @@
+name: Publish Release
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'gradle.properties'
+  workflow_dispatch:
+
+jobs:
+  Get-Properties:
+    runs-on: ubuntu-latest
+    outputs:
+      release-type: ${{ steps.type.outputs.release-type }}
+      plugin-version: ${{ steps.properties.outputs.plugin_version }}
+      version-changed: ${{ steps.check-version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if plugin_version actually changed
+        id: check-version
+        run: |
+          # Extract current plugin_version
+          current=$(sed -n "/^[[:space:]]*plugin_version[[:space:]]*=[[:space:]]*/s/^[[:space:]]*plugin_version[[:space:]]*=[[:space:]]*//p" ./gradle.properties)
+
+          # On workflow_dispatch, always proceed (no before/after commit refs)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Manual trigger — proceeding with release of version: $current"
+            exit 0
+          fi
+
+          # On push, check if plugin_version line actually changed
+          if git diff ${{ github.event.before }} ${{ github.event.after }} -- gradle.properties | grep -q 'plugin_version'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Plugin version changed to: $current"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Plugin version did not change — skipping release"
+          fi
+
+      - name: Read plugin_version from gradle.properties
+        id: properties
+        run: |
+          result=$(sed -n "/^[[:space:]]*plugin_version[[:space:]]*=[[:space:]]*/s/^[[:space:]]*plugin_version[[:space:]]*=[[:space:]]*//p" ./gradle.properties)
+          echo "plugin_version=$result" >> $GITHUB_OUTPUT
+
+      - name: Determine release type from version string
+        id: type
+        run: |
+          version="${{ steps.properties.outputs.plugin_version }}"
+          if echo "$version" | grep -qiE 'alpha|beta|rc|pre|snapshot'; then
+            echo "release-type=beta" >> $GITHUB_OUTPUT
+          else
+            echo "release-type=release" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/github-script@v7
+        env:
+          READ_VERSION: ${{ steps.properties.outputs.plugin_version }}
+          EVENT_NAME: ${{ github.event_name }}
+        with:
+          script: |
+            const { READ_VERSION, EVENT_NAME } = process.env;
+
+            // On manual trigger, skip duplicate check — user is intentionally retrying
+            if (EVENT_NAME === 'workflow_dispatch') {
+              core.info('Manual trigger — skipping duplicate release check for version ' + READ_VERSION);
+              return;
+            }
+
+            const releases = (await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            })).data;
+            for (const release of releases) {
+              // Extract version from release name "illegal-scanner vX.Y.Z" for exact comparison.
+              // Using includes() would false-match: "1.2.9-beta" contains "1.2.9".
+              if (release.name) {
+                const versionFromName = release.name.replace(/^illegal-scanner v/, '');
+                if (versionFromName === READ_VERSION) {
+                  core.setFailed('Version ' + READ_VERSION + ' has already been released! Bump plugin_version in gradle.properties to publish a new version, or use workflow_dispatch to retry.')
+                }
+              }
+            }
+            core.info('Version ' + READ_VERSION + ' is new — proceeding with release.')
+
+  build:
+    needs: [Get-Properties]
+    if: needs.Get-Properties.outputs.version-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'microsoft'
+      - run: chmod +x ./gradlew
+      - run: ./gradlew build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Artifacts
+          path: build/libs/
+
+  publish:
+    needs: [build, Get-Properties]
+    if: needs.Get-Properties.outputs.version-changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Artifacts
+          path: ./release-artifacts
+
+      - name: Find correct JAR
+        id: findjar
+        run: |
+          output="$(find release-artifacts/ ! -name "*-dev.jar" ! -name "*-sources.jar" -type f -printf "%f\n")"
+          echo "jarpath=release-artifacts/$output" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog from git history
+        id: changelog
+        run: |
+          # Find the last commit that changed gradle.properties (excluding HEAD)
+          last_version_commit=$(git log --follow -2 --pretty=format:"%H" -- gradle.properties | tail -1)
+          if [ -n "$last_version_commit" ] && [ "$last_version_commit" != "$(git rev-parse HEAD)" ]; then
+            # Get commits since the last version bump
+            git log "${last_version_commit}..HEAD" --pretty=format:"- %s" --no-merges > changelog.md
+          else
+            # First release or can't find previous — use recent commits
+            git log -10 --pretty=format:"- %s" --no-merges > changelog.md
+          fi
+          echo "Changelog:"
+          cat changelog.md
+
+      - uses: Kir-Antipov/mc-publish@v3
+        with:
+          # Platform tokens — publishes to all three simultaneously
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+
+          files: ${{ steps.findjar.outputs.jarpath }}
+
+          name: illegal-scanner v${{ needs.Get-Properties.outputs.plugin-version }}
+          version: ${{ needs.Get-Properties.outputs.plugin-version }}
+          version-type: ${{ needs.Get-Properties.outputs.release-type }}
+
+          changelog-file: changelog.md
+
+          loaders: paper
+          game-versions: ">=1.20.5 <=1.20.6"
+          java: Java 21
+
+          modrinth-id: zb39UOk7
+          curseforge-id: 1594659
+
+      - name: Sync README to Modrinth project description
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          python3 -c "
+          import json, sys
+          with open('README.md', 'r', encoding='utf-8') as f:
+              body = f.read()
+          data = json.dumps({'body': body})
+          json.loads(data)
+          with open('/tmp/body.json', 'w', encoding='utf-8') as out:
+              out.write(data)
+          "
+
+          echo "Sending README to Modrinth project zb39UOk7..."
+
+          HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            -X PATCH "https://api.modrinth.com/v2/project/zb39UOk7" \
+            -H "Authorization: $MODRINTH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: OhtoAi/illegal-scanner (GitHub Actions)" \
+            -d @/tmp/body.json)
+
+          echo "HTTP Status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "✓ Modrinth project description updated successfully."
+          else
+            echo "⚠ Failed to update Modrinth description (HTTP $HTTP_CODE). The release was still published."
+            cat /tmp/response.txt
+          fi
+          # Non-fatal — release was already published successfully
+          # CurseForge has no write API; update description manually
