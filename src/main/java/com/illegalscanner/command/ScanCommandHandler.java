@@ -26,6 +26,7 @@ public class ScanCommandHandler implements SubCommandHandler {
         }
         if (args.length < 1) {
             sender.sendMessage("§e/is scan <chunk|player|area|res|world|full>");
+            sender.sendMessage("§e  world: /is scan world [世界名|all_world] [loaded_chunks|unloaded_chunks|all_chunks]");
             return true;
         }
         return switch (args[0].toLowerCase()) {
@@ -162,41 +163,89 @@ public class ScanCommandHandler implements SubCommandHandler {
         return true;
     }
 
-    private boolean handleWorld(CommandSender sender, String[] args) {
-        String flag = "all"; // default
-        String worldName = null;
-        int argIdx = 1;
+    // Map user-facing chunk mode keywords to internal ScanService mode names
+    private static String toInternalMode(String keyword) {
+        return switch (keyword) {
+            case "loaded_chunks" -> "loaded";
+            case "unloaded_chunks" -> "unloaded";
+            case "all_chunks" -> "all";
+            default -> throw new IllegalArgumentException("Unknown mode: " + keyword);
+        };
+    }
 
-        // Parse optional flag
-        if (args.length >= 2 && args[1].startsWith("-")) {
-            flag = args[1].toLowerCase();
-            String mode = flag.substring(1); // "loaded", "unloaded", "all"
-            if (!mode.equals("loaded") && !mode.equals("unloaded") && !mode.equals("all")) {
-                sender.sendMessage("§c未知标志: " + flag + "。可用: -loaded, -unloaded, -all");
+    private boolean handleWorld(CommandSender sender, String[] args) {
+        // Syntax: /is scan world [世界名|all_world] [loaded_chunks|unloaded_chunks|all_chunks]
+        // First arg = world name (required for mode), second arg = chunk mode (optional)
+        // Default: current world, loaded_chunks
+
+        String worldName = null;
+        String chunkMode = "loaded_chunks"; // default
+
+        // Parse world name (args[1])
+        if (args.length >= 2) {
+            worldName = args[1];
+        }
+
+        // Parse chunk mode (args[2]) — only available when world name is given
+        if (worldName != null && args.length >= 3) {
+            String arg2 = args[2].toLowerCase();
+            if (arg2.equals("loaded_chunks") || arg2.equals("unloaded_chunks") || arg2.equals("all_chunks")) {
+                chunkMode = arg2;
+            } else {
+                sender.sendMessage("§c未知模式: " + arg2 + "。可用: loaded_chunks, unloaded_chunks, all_chunks");
                 return true;
             }
-            argIdx = 2;
         }
 
-        // Parse optional world name
-        if (args.length > argIdx) {
-            worldName = args[argIdx];
-        }
-
+        // Resolve world name default
         if (worldName == null) {
             if (sender instanceof Player p) {
                 worldName = p.getWorld().getName();
             } else {
-                sender.sendMessage("§e用法: /is scan world [-loaded|-unloaded|-all] [世界名]");
+                sender.sendMessage("§e用法: /is scan world [世界名|all_world] [loaded_chunks|unloaded_chunks|all_chunks]");
                 return true;
             }
         }
 
-        String modeLabel = flag.substring(1);
-        sender.sendMessage("§e正在扫描世界 " + worldName + " (" + modeLabel + " 模式)...");
-        scanService.scanWorld(worldName, modeLabel)
+        String internalMode = toInternalMode(chunkMode);
+
+        // all_world → scan every world
+        if (worldName.equalsIgnoreCase("all_world")) {
+            sender.sendMessage("§e正在扫描所有世界 (" + chunkMode + ")...");
+            scanAllWorlds(sender, internalMode);
+            return true;
+        }
+
+        sender.sendMessage("§e正在扫描世界 " + worldName + " (" + chunkMode + ")...");
+        scanService.scanWorld(worldName, internalMode)
                 .thenAccept(count -> sender.sendMessage("§a世界扫描完成: 发现 " + count + " 个违规物品。"));
         return true;
+    }
+
+    /**
+     * Scan every loaded world with the given mode.
+     * Each world gets its own scan session.
+     */
+    private void scanAllWorlds(CommandSender sender, String mode) {
+        var worlds = plugin.getServer().getWorlds();
+        if (worlds.isEmpty()) {
+            sender.sendMessage("§c没有已加载的世界。");
+            return;
+        }
+        java.util.concurrent.atomic.AtomicInteger remaining = new java.util.concurrent.atomic.AtomicInteger(worlds.size());
+        java.util.concurrent.atomic.AtomicInteger totalFlagged = new java.util.concurrent.atomic.AtomicInteger(0);
+        for (org.bukkit.World world : worlds) {
+            String wname = world.getName();
+            sender.sendMessage("§7  → 开始扫描世界: " + wname);
+            scanService.scanWorld(wname, mode)
+                    .thenAccept(count -> {
+                        totalFlagged.addAndGet(count);
+                        sender.sendMessage("§7  → " + wname + " 扫描完成: " + count + " 违规");
+                        if (remaining.decrementAndGet() == 0) {
+                            sender.sendMessage("§a所有世界扫描完成: 共发现 " + totalFlagged.get() + " 个违规物品。");
+                        }
+                    });
+        }
     }
 
     private boolean handleFull(CommandSender sender) {

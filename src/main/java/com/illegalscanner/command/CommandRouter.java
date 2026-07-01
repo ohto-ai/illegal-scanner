@@ -170,6 +170,7 @@ public class CommandRouter implements CommandExecutor {
     private void sendHelp(CommandSender sender) {
         sender.sendMessage("§6===== illegal-scanner v" + plugin.getPluginMeta().getVersion() + " =====");
         sender.sendMessage("§e/is scan <chunk|player|area|res|world|full> §7— 执行扫描并记录");
+        sender.sendMessage("§e  world: /is scan world [世界名|all_world] [loaded_chunks|unloaded_chunks|all_chunks] §7(默认: 当前世界, loaded_chunks)");
         sender.sendMessage("§e/is check <item|player|chunk> §7— 快速检测不记录");
         sender.sendMessage("§e/is view <chunk|player|area|res|world|full|scan|record|item> §7— GUI 查看");
         sender.sendMessage("§e/is report <chunk|player|area|res|world|full|scan|record|item> §7— 文本查看");

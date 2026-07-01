@@ -94,16 +94,15 @@ public class ISTabCompleter implements TabCompleter {
         }
         if (sub.equals("world")) {
             if (args.length == 3) {
-                // Suggest mode flags AND world names
+                // Only suggest world names + all_world (no modes — must specify world first)
                 List<String> suggestions = new java.util.ArrayList<>();
-                suggestions.add("-loaded");
-                suggestions.add("-unloaded");
-                suggestions.add("-all");
+                suggestions.add("all_world");
                 suggestions.addAll(worldNames(partial));
                 return suggestions.stream().filter(s -> s.toLowerCase().startsWith(partial)).toList();
             }
             if (args.length == 4) {
-                return worldNames(partial);
+                // After world name → suggest chunk modes
+                return filter(List.of("loaded_chunks", "unloaded_chunks", "all_chunks"), partial);
             }
         }
         return List.of();
