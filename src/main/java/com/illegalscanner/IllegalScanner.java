@@ -57,16 +57,16 @@ public final class IllegalScanner extends JavaPlugin {
         instance = this;
 
         getLogger().info(" _|_|_|  _|  _|                                _|                      ");
-        getLogger().info("    _|    _|  _|    _|_|      _|_|_|    _|_|_|  _|                      ");
-        getLogger().info("    _|    _|  _|  _|_|_|_|  _|    _|  _|    _|  _|                      ");
-        getLogger().info("    _|    _|  _|  _|        _|    _|  _|    _|  _|                      ");
+        getLogger().info("   _|    _|  _|    _|_|      _|_|_|    _|_|_|  _|                      ");
+        getLogger().info("   _|    _|  _|  _|_|_|_|  _|    _|  _|    _|  _|                      ");
+        getLogger().info("   _|    _|  _|  _|        _|    _|  _|    _|  _|                      ");
         getLogger().info(" _|_|_|  _|  _|    _|_|_|    _|_|_|    _|_|_|  _|                      ");
-        getLogger().info("                                  _|                                    ");
+        getLogger().info("                                  _|                                   ");
         getLogger().info("   _|_|_|                    _|_|                                      ");
         getLogger().info(" _|          _|_|_|    _|_|_|  _|_|_|    _|_|_|      _|_|    _|  _|_|  ");
-        getLogger().info("    _|_|    _|        _|    _|  _|    _|  _|    _|  _|_|_|_|  _|_|      ");
-        getLogger().info("        _|  _|        _|    _|  _|    _|  _|    _|  _|        _|        ");
-        getLogger().info("  _|_|_|      _|_|_|    _|_|_|  _|    _|  _|    _|    _|_|_|  _|        ");
+        getLogger().info("   _|_|    _|        _|    _|  _|    _|  _|    _|  _|_|_|_|  _|_|      ");
+        getLogger().info("       _|  _|        _|    _|  _|    _|  _|    _|  _|        _|        ");
+        getLogger().info(" _|_|_|      _|_|_|    _|_|_|  _|    _|  _|    _|    _|_|_|  _|        ");
         getLogger().info("");
         getLogger().info("  Welcome! Illegal Scanner v" + getPluginMeta().getVersion() + " — Ready");
 
