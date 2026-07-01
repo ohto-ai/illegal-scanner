@@ -272,21 +272,6 @@ ignore_materials:
   - STRUCTURE_VOID
 ```
 
-### 5.5 可疑关键字
-
-```yaml
-suspicious_keywords:
-  - "管理员专属"
-  - "神器"
-  - "GM"
-  - "admin"
-  - "op"
-  - "hack"
-  - "exploit"
-  - "超模"
-  - "无敌"
-  - "创造"
-```
 
 物品名称或 lore 中包含这些关键字将被标记为 SUSPICIOUS。
 
@@ -502,8 +487,6 @@ validation:
 在 `config.yml` 中调整对应设置。例如：
 - 允许更高等级的附魔 → 调高或关闭 `enforce_max_levels`
 - 允许 lore → 设置 `flag_lore_presence: false`
-- 添加关键字白名单 → 修改 `suspicious_keywords`
-
 ### Q: 数据库会越来越大吗？
 
 定期执行 `/is db vacuum` 可以压缩数据库。建议配合定期任务（如每天一次）自动清理。

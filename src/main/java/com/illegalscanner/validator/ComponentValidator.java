@@ -20,8 +20,9 @@ public class ComponentValidator implements ItemValidator {
             "\\{\"text\":\"", Pattern.CASE_INSENSITIVE);
     private static final Pattern CONTROL_CHARS = Pattern.compile(
             "[\\u200B-\\u200F\\u2028-\\u202F\\uFEFF\\u00AD\\u2060]");
-    private static final Pattern MULTI_SECTION = Pattern.compile(
-            "§[0-9a-fklmnor]§[0-9a-fklmnor]");
+    // Formatting codes in text — anvil cannot produce § characters
+    private static final Pattern ANY_SECTION = Pattern.compile(
+            "§[0-9a-fklmnor]");
 
     public ComponentValidator(IllegalScanner plugin) {
         this.plugin = plugin;
@@ -82,12 +83,12 @@ public class ComponentValidator implements ItemValidator {
                                     "{max}", String.valueOf(maxLength))));
                 }
 
-                // Non-italic = command only
+                // Any style formatting (color, bold, italic override, etc.) = command only
                 if (plugin.getConfigManager().getConfig()
-                        .getBoolean("validation.flag_non_italic_custom_name", true)) {
-                    if (ItemAccessor.isCustomNameNonItalic(itemStack)) {
-                        violations.add(Violation.illegal("CUSTOM_NAME_NON_ITALIC",
-                                msg("CUSTOM_NAME_NON_ITALIC")));
+                        .getBoolean("validation.flag_styled_custom_name", true)) {
+                    if (ItemAccessor.isCustomNameStyled(itemStack)) {
+                        violations.add(Violation.illegal("CUSTOM_NAME_STYLED",
+                                msg("CUSTOM_NAME_STYLED")));
                     }
                 }
 
@@ -99,11 +100,10 @@ public class ComponentValidator implements ItemValidator {
                     violations.add(Violation.warn("CUSTOM_NAME_CONTROL_CHARS",
                             msg("CUSTOM_NAME_CONTROL_CHARS")));
                 }
-                if (MULTI_SECTION.matcher(customName).find()) {
-                    violations.add(Violation.warn("CUSTOM_NAME_CONTROL_CHARS",
-                            msg("CUSTOM_NAME_CONTROL_CHARS")));
+                if (ANY_SECTION.matcher(customName).find()) {
+                    violations.add(Violation.illegal("CUSTOM_NAME_STYLED",
+                            msg("CUSTOM_NAME_STYLED")));
                 }
-                checkSuspiciousKeywords(violations, customName, "custom_name");
             }
         }
 
@@ -168,19 +168,6 @@ public class ComponentValidator implements ItemValidator {
         if (CONTROL_CHARS.matcher(text).find()) {
             violations.add(Violation.warn("CUSTOM_NAME_CONTROL_CHARS",
                     msg("CUSTOM_NAME_CONTROL_CHARS")));
-        }
-        checkSuspiciousKeywords(violations, text, source);
-    }
-
-    private void checkSuspiciousKeywords(List<Violation> violations, String text, String source) {
-        List<String> keywords = plugin.getConfigManager().getConfig()
-                .getStringList("suspicious_keywords");
-        String lower = text.toLowerCase();
-        for (String keyword : keywords) {
-            if (lower.contains(keyword.toLowerCase())) {
-                violations.add(Violation.warn("SUSPICIOUS_KEYWORD",
-                        "Suspicious keyword '" + keyword + "' found in " + source));
-            }
         }
     }
 

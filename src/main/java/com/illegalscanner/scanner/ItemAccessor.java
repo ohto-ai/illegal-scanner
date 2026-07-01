@@ -88,13 +88,16 @@ public final class ItemAccessor {
         return null;
     }
 
-    /** Check if custom_name has non-italic formatting (command-only) */
-    public static boolean isCustomNameNonItalic(ItemStack item) {
+    /**
+     * Check if custom_name has any style formatting beyond plain text.
+     * Anvil renames produce a plain literal text component with empty/default style.
+     * Any non-empty style (color, bold, italic override, etc.) = command/creative only.
+     */
+    public static boolean isCustomNameStyled(ItemStack item) {
         net.minecraft.world.item.ItemStack nms = toNms(item);
         if (nms.has(DataComponents.CUSTOM_NAME)) {
             var name = nms.get(DataComponents.CUSTOM_NAME);
-            // Check if style explicitly sets italic to false
-            return name != null && !name.getStyle().isItalic();
+            return name != null && !name.getStyle().isEmpty();
         }
         return false;
     }

@@ -91,7 +91,7 @@ validation:
 
   # Custom name checks
   custom_name_max_length: 50        # Anvil limit
-  flag_non_italic_custom_name: true # Non-italic = command only
+  flag_styled_custom_name: true     # Any style formatting (color, bold, italic, etc.) = command only
 
 # ----------------------------------------------------------------------------
 # Monitor Settings
@@ -125,20 +125,6 @@ ignore_materials:
   - DEBUG_STICK
   - STRUCTURE_VOID
 
-# ----------------------------------------------------------------------------
-# Suspicious content keywords for lore/name scanning
-# ----------------------------------------------------------------------------
-suspicious_keywords:
-  - "管理员专属"
-  - "神器"
-  - "GM"
-  - "admin"
-  - "op"
-  - "hack"
-  - "exploit"
-  - "超模"
-  - "无敌"
-  - "创造"
 
 # ----------------------------------------------------------------------------
 # Violation message templates (supports placeholders in {braces})
@@ -161,7 +147,7 @@ violation_messages:
   COMPONENT_MAX_STACK_SIZE: "Stack size {found} exceeds item max {max}"
   COMPONENT_MAX_DAMAGE: "Max damage {found} != vanilla {expected}"
   CUSTOM_NAME_TOO_LONG: "Custom name too long: {length} chars (max {max})"
-  CUSTOM_NAME_NON_ITALIC: "Custom name has non-italic formatting (command only)"
+  CUSTOM_NAME_STYLED: "Custom name has style formatting (command/creative only)"
   CUSTOM_NAME_JSON_INJECTION: "Custom name contains JSON injection pattern"
   CUSTOM_NAME_CONTROL_CHARS: "Custom name contains invisible control characters"
   POTION_AMPLIFIER: "Potion effect {effect} amplifier {found} exceeds max {max}"
