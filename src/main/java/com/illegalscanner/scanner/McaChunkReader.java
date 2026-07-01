@@ -72,7 +72,9 @@ public final class McaChunkReader {
             RegistryAccess registryAccess,
             boolean includeItemFrames,
             boolean includeArmorStands,
-            boolean includeMinecarts) {
+            boolean includeMinecarts,
+            boolean includeChestBoats,
+            boolean includeEntityEquipment) {
 
         int rx = cx >> 5;
         int rz = cz >> 5;
@@ -127,7 +129,8 @@ public final class McaChunkReader {
             // Extract containers from block entities and entities
             extractBlockEntities(root, cx, cz, registryAccess, containers);
             extractEntities(root, cx, cz, registryAccess,
-                    includeItemFrames, includeArmorStands, includeMinecarts, containers);
+                    includeItemFrames, includeArmorStands, includeMinecarts, includeChestBoats,
+                    includeEntityEquipment, containers);
 
             return containers;
 
@@ -241,6 +244,7 @@ public final class McaChunkReader {
     private static void extractEntities(CompoundTag root, int cx, int cz,
             RegistryAccess registryAccess,
             boolean includeItemFrames, boolean includeArmorStands, boolean includeMinecarts,
+            boolean includeChestBoats, boolean includeEntityEquipment,
             List<ContainerFromNbt> containers) {
         if (!root.contains("Entities", Tag.TAG_LIST)) return;
 
@@ -254,12 +258,23 @@ public final class McaChunkReader {
             boolean isArmorStand = id.equals("minecraft:armor_stand");
             boolean isChestMinecart = id.equals("minecraft:chest_minecart");
             boolean isHopperMinecart = id.equals("minecraft:hopper_minecart");
+            boolean isChestBoat = id.endsWith("_chest_boat") || id.endsWith("_chest_raft");
+            boolean isPlayer = id.equals("minecraft:player");
+            boolean isKnownType = isItemFrame || isArmorStand || isChestMinecart || isHopperMinecart || isChestBoat || isPlayer;
 
             if (isItemFrame && !includeItemFrames) continue;
             if (isArmorStand && !includeArmorStands) continue;
             if ((isChestMinecart || isHopperMinecart) && !includeMinecarts) continue;
-            if (!isItemFrame && !isArmorStand && !isChestMinecart && !isHopperMinecart) {
+            if (isChestBoat && !includeChestBoats) continue;
+            if (isPlayer) continue; // Players scanned separately by PlayerScanner
+            if (!isKnownType && !includeEntityEquipment) {
                 continue; // not an entity type we care about
+            }
+            // For entity equipment: any unknown entity type with gear is a candidate
+            if (!isKnownType && includeEntityEquipment) {
+                boolean hasEquipment = entity.contains("HandItems", Tag.TAG_LIST)
+                        || entity.contains("ArmorItems", Tag.TAG_LIST);
+                if (!hasEquipment) continue;
             }
 
             // Read position
@@ -312,6 +327,38 @@ public final class McaChunkReader {
                         containerType = isChestMinecart ? "MINECART_CHEST" : "MINECART_HOPPER";
                     }
                 }
+            } else if (isChestBoat) {
+                if (entity.contains("Items", Tag.TAG_LIST)) {
+                    ListTag boatItems = entity.getList("Items", Tag.TAG_LIST);
+                    items = parseItemsList(boatItems, registryAccess);
+                    if (!items.isEmpty()) {
+                        containerType = "CHEST_BOAT";
+                    }
+                }
+            } else {
+                // Living entity equipment (mobs wearing/holding gear)
+                items = new ArrayList<>();
+                // ArmorItems: helmet(100), chestplate(101), leggings(102), boots(103)
+                if (entity.contains("ArmorItems", Tag.TAG_LIST)) {
+                    ListTag armorItems = entity.getList("ArmorItems", Tag.TAG_COMPOUND);
+                    for (int s = 0; s < armorItems.size() && s < 4; s++) {
+                        var bukkitItem = parseSingleItem(armorItems.getCompound(s), registryAccess);
+                        if (bukkitItem != null && !bukkitItem.getType().isAir()) {
+                            items.add(new SlotItemNbt(100 + s, bukkitItem));
+                        }
+                    }
+                }
+                // HandItems: mainhand(0), offhand(40)
+                if (entity.contains("HandItems", Tag.TAG_LIST)) {
+                    ListTag handItems = entity.getList("HandItems", Tag.TAG_COMPOUND);
+                    for (int s = 0; s < handItems.size() && s < 2; s++) {
+                        var bukkitItem = parseSingleItem(handItems.getCompound(s), registryAccess);
+                        if (bukkitItem != null && !bukkitItem.getType().isAir()) {
+                            items.add(new SlotItemNbt(s == 0 ? 0 : 40, bukkitItem));
+                        }
+                    }
+                }
+                if (!items.isEmpty()) containerType = "ENTITY_EQUIPMENT";
             }
 
             if (containerType != null && items != null && !items.isEmpty()) {

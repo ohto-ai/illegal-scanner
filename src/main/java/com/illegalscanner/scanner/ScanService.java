@@ -596,6 +596,10 @@ public class ScanService {
                     .getBoolean("scan.scan_armor_stands", true);
             boolean sm = plugin.getConfigManager().getConfig()
                     .getBoolean("scan.scan_minecart_containers", true);
+            boolean scb = plugin.getConfigManager().getConfig()
+                    .getBoolean("scan.scan_chest_boats", true);
+            boolean see = plugin.getConfigManager().getConfig()
+                    .getBoolean("scan.scan_entity_equipment", true);
             int asyncWindow = plugin.getConfigManager().getConfig()
                     .getInt("scan.mca_async_window", 40);
             boolean mainPassDone = index.get() >= chunks.size();
@@ -648,7 +652,7 @@ public class ScanService {
                             CompletableFuture<List<McaChunkReader.ContainerFromNbt>> mcaFuture =
                                     CompletableFuture.supplyAsync(
                                         () -> McaChunkReader.readChunkItems(world.getWorldFolder(),
-                                                cx, cz, registryAccess, sf, sa, sm),
+                                                cx, cz, registryAccess, sf, sa, sm, scb, see),
                                         mcaReadPool);
                             inFlightFutures.add(new McaReadFuture(mcaFuture, cx, cz));
                         }
@@ -807,6 +811,10 @@ public class ScanService {
                             .getBoolean("scan.scan_armor_stands", true);
                     boolean sm = plugin.getConfigManager().getConfig()
                             .getBoolean("scan.scan_minecart_containers", true);
+                    boolean scb = plugin.getConfigManager().getConfig()
+                            .getBoolean("scan.scan_chest_boats", true);
+                    boolean see = plugin.getConfigManager().getConfig()
+                            .getBoolean("scan.scan_entity_equipment", true);
 
                     while (processed < chunksPerTick && index.get() < allChunks.size()) {
                         int i = index.getAndIncrement();
@@ -836,7 +844,7 @@ public class ScanService {
                                 // MCA direct read — zero chunk load, zero worldgen
                                 List<McaChunkReader.ContainerFromNbt> containers =
                                         McaChunkReader.readChunkItems(world.getWorldFolder(), cx, cz,
-                                                registryAccess, sf, sa, sm);
+                                                registryAccess, sf, sa, sm, scb, see);
                                 int f = scanContainersFromNbt(containers, world, cx, cz,
                                         "full", sessionId);
                                 flagged.addAndGet(f);
@@ -1087,6 +1095,10 @@ public class ScanService {
                     .getBoolean("scan.scan_armor_stands", true);
             boolean sm = plugin.getConfigManager().getConfig()
                     .getBoolean("scan.scan_minecart_containers", true);
+            boolean scb = plugin.getConfigManager().getConfig()
+                    .getBoolean("scan.scan_chest_boats", true);
+            boolean see = plugin.getConfigManager().getConfig()
+                    .getBoolean("scan.scan_entity_equipment", true);
             int asyncWindow = plugin.getConfigManager().getConfig()
                     .getInt("scan.mca_async_window", 40);
             boolean mainPassDone = paused.mainPassDone || index.get() >= paused.chunks.size();
@@ -1138,7 +1150,7 @@ public class ScanService {
                             CompletableFuture<List<McaChunkReader.ContainerFromNbt>> mcaFuture =
                                     CompletableFuture.supplyAsync(
                                         () -> McaChunkReader.readChunkItems(paused.world.getWorldFolder(),
-                                                cx, cz, registryAccess, sf, sa, sm),
+                                                cx, cz, registryAccess, sf, sa, sm, scb, see),
                                         mcaReadPool);
                             inFlightFutures.add(new McaReadFuture(mcaFuture, cx, cz));
                         }
@@ -1260,6 +1272,10 @@ public class ScanService {
                         .getBoolean("scan.scan_armor_stands", true);
                 boolean sm = plugin.getConfigManager().getConfig()
                         .getBoolean("scan.scan_minecart_containers", true);
+                boolean scb = plugin.getConfigManager().getConfig()
+                        .getBoolean("scan.scan_chest_boats", true);
+                boolean see = plugin.getConfigManager().getConfig()
+                        .getBoolean("scan.scan_entity_equipment", true);
 
                 while (processed < chunksPerTick && index.get() < paused.chunks.size()) {
                     int i = index.getAndIncrement();
@@ -1289,7 +1305,7 @@ public class ScanService {
                             // MCA direct read — zero chunk load, zero worldgen
                             List<McaChunkReader.ContainerFromNbt> containers =
                                     McaChunkReader.readChunkItems(world.getWorldFolder(), cx, cz,
-                                            registryAccess, sf, sa, sm);
+                                            registryAccess, sf, sa, sm, scb, see);
                             int f = scanContainersFromNbt(containers, world, cx, cz,
                                     paused.scanType, sessionId);
                             paused.flagged.addAndGet(f);

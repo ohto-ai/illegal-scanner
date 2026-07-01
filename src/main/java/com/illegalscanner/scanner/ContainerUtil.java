@@ -41,7 +41,8 @@ public final class ContainerUtil {
      * Find all containers in a chunk and collect their items.
      */
     public static List<ContainerInfo> findContainers(Chunk chunk, boolean includeItemFrames,
-                                                     boolean includeArmorStands, boolean includeMinecarts) {
+                                                     boolean includeArmorStands, boolean includeMinecarts,
+                                                     boolean includeChestBoats, boolean includeEntityEquipment) {
         List<ContainerInfo> containers = new ArrayList<>();
         World world = chunk.getWorld();
 
@@ -117,6 +118,40 @@ public final class ContainerUtil {
                     }
                 }
             }
+
+            // Chest boats (mobile entity-based container, similar to minecarts)
+            if (includeChestBoats && entity instanceof ChestBoat boat) {
+                List<SlotItem> items = collectItems(boat.getInventory());
+                if (!items.isEmpty()) {
+                    containers.add(new ContainerInfo(
+                            entity.getLocation(),
+                            "CHEST_BOAT",
+                            entity.getType().name(),
+                            entity.getUniqueId().toString(),
+                            items
+                    ));
+                }
+            }
+
+            // Living entity equipment (mobs with hand/armor items, etc.)
+            // Excludes players (scanned separately by PlayerScanner),
+            // armor stands (handled separately with their own flag),
+            // and item frames (not LivingEntity, but belt-and-suspenders).
+            if (includeEntityEquipment && entity instanceof LivingEntity living
+                    && !(entity instanceof Player)
+                    && !(entity instanceof ArmorStand)
+                    && !(entity instanceof ItemFrame)) {
+                List<SlotItem> items = collectLivingEntityItems(living);
+                if (!items.isEmpty()) {
+                    containers.add(new ContainerInfo(
+                            entity.getLocation(),
+                            "ENTITY_EQUIPMENT",
+                            entity.getType().name(),
+                            entity.getUniqueId().toString(),
+                            items
+                    ));
+                }
+            }
         }
 
         return containers;
@@ -166,6 +201,43 @@ public final class ContainerUtil {
             items.add(new SlotItem(0, mainHand.clone()));
         }
         ItemStack offHand = stand.getEquipment().getItemInOffHand();
+        if (offHand != null && !offHand.getType().isAir()) {
+            items.add(new SlotItem(40, offHand.clone()));
+        }
+        return items;
+    }
+
+    /**
+     * Collect equipped items from a living entity (mobs, etc.).
+     * Uses the same slot conventions as armor stands for consistency.
+     */
+    private static List<SlotItem> collectLivingEntityItems(LivingEntity entity) {
+        List<SlotItem> items = new ArrayList<>();
+        if (entity.getEquipment() == null) return items;
+        // Equipment slots: 0=helmet, 1=chestplate, 2=leggings, 3=boots
+        // 100+ offsets to distinguish from regular inventory slots
+        ItemStack helmet = entity.getEquipment().getHelmet();
+        if (helmet != null && !helmet.getType().isAir()) {
+            items.add(new SlotItem(100, helmet.clone()));
+        }
+        ItemStack chestplate = entity.getEquipment().getChestplate();
+        if (chestplate != null && !chestplate.getType().isAir()) {
+            items.add(new SlotItem(101, chestplate.clone()));
+        }
+        ItemStack leggings = entity.getEquipment().getLeggings();
+        if (leggings != null && !leggings.getType().isAir()) {
+            items.add(new SlotItem(102, leggings.clone()));
+        }
+        ItemStack boots = entity.getEquipment().getBoots();
+        if (boots != null && !boots.getType().isAir()) {
+            items.add(new SlotItem(103, boots.clone()));
+        }
+        // Hand items
+        ItemStack mainHand = entity.getEquipment().getItemInMainHand();
+        if (mainHand != null && !mainHand.getType().isAir()) {
+            items.add(new SlotItem(0, mainHand.clone()));
+        }
+        ItemStack offHand = entity.getEquipment().getItemInOffHand();
         if (offHand != null && !offHand.getType().isAir()) {
             items.add(new SlotItem(40, offHand.clone()));
         }

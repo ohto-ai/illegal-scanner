@@ -37,6 +37,8 @@ scan:
   scan_item_frames: true
   scan_armor_stands: true
   scan_minecart_containers: true
+  scan_chest_boats: true
+  scan_entity_equipment: true        # Scan LivingEntity equipment (mobs with gear, etc.)
   scan_dropped_items: false         # Performance-heavy, off by default
   scan_player_enderchests: true
   scan_player_inventories: true

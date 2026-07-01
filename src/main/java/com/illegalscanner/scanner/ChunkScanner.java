@@ -81,11 +81,16 @@ public class ChunkScanner {
                 .getBoolean("scan.scan_armor_stands", true);
         boolean scanMinecarts = plugin.getConfigManager().getConfig()
                 .getBoolean("scan.scan_minecart_containers", true);
+        boolean scanChestBoats = plugin.getConfigManager().getConfig()
+                .getBoolean("scan.scan_chest_boats", true);
+        boolean scanEntityEquipment = plugin.getConfigManager().getConfig()
+                .getBoolean("scan.scan_entity_equipment", true);
 
         List<ContainerUtil.ContainerInfo> containers;
         try {
             containers = ContainerUtil.findContainers(
-                    chunk, scanItemFrames, scanArmorStands, scanMinecarts);
+                    chunk, scanItemFrames, scanArmorStands, scanMinecarts, scanChestBoats,
+                    scanEntityEquipment);
         } catch (Exception e) {
             plugin.getLogger().log(Level.WARNING,
                     "Error finding containers in chunk " + chunk.getX() + "," + chunk.getZ(), e);
