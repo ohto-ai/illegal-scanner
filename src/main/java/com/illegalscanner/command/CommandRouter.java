@@ -29,7 +29,7 @@ public class CommandRouter implements CommandExecutor {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        // Hidden admin log suppression
+        // Quiet mode log suppression
         boolean wasLogSuppressed = false;
         if (plugin.getPlayerWhitelistManager() != null
                 && plugin.getPlayerWhitelistManager().shouldSuppressLogging(sender)) {

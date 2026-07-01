@@ -45,7 +45,7 @@ public final class IllegalScanner extends JavaPlugin {
     // Command
     private CommandRouter commandRouter;
 
-    /** ThreadLocal flag for suppressing log output (hidden admin). */
+    /** ThreadLocal flag for suppressing log output (quiet mode). */
     private static final ThreadLocal<Boolean> SUPPRESS_LOG = ThreadLocal.withInitial(() -> false);
 
     public static IllegalScanner getInstance() {
