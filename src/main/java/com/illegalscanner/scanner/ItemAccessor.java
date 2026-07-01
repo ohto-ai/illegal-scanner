@@ -2,6 +2,8 @@ package com.illegalscanner.scanner;
 
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.world.item.component.*;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.inventory.ItemStack;
@@ -71,6 +73,23 @@ public final class ItemAccessor {
             return nms.get(DataComponents.ITEM_NAME).getString();
         }
         return null;
+    }
+
+    /**
+     * Check if the item_name component is a vanilla translatable component
+     * (e.g., the Ominous Banner / 灾厄旗帜). These are legitimate survival items
+     * and should NOT be flagged as illegal.
+     *
+     * @param item the Bukkit ItemStack to check
+     * @return true if item_name is present AND its content type is TranslatableContents
+     */
+    public static boolean isItemNameTranslatable(ItemStack item) {
+        net.minecraft.world.item.ItemStack nms = toNms(item);
+        if (nms.has(DataComponents.ITEM_NAME)) {
+            Component component = nms.get(DataComponents.ITEM_NAME);
+            return component != null && component.getContents() instanceof TranslatableContents;
+        }
+        return false;
     }
 
     /** Check if item has custom_name component */

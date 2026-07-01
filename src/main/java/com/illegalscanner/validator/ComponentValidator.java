@@ -61,11 +61,15 @@ public class ComponentValidator implements ItemValidator {
         // === Item Name Override ===
         if (plugin.getConfigManager().getConfig().getBoolean("validation.flag_item_name_presence", true)) {
             if (ItemAccessor.hasItemName(itemStack)) {
-                String itemName = ItemAccessor.getItemName(itemStack);
-                if (itemName != null) {
-                    violations.add(Violation.illegal("COMPONENT_ITEM_NAME",
-                            msg("COMPONENT_ITEM_NAME")));
-                    checkTextContent(violations, itemName, "item_name");
+                // Vanilla translatable item_names (e.g. Ominous Banner / 灾厄旗帜)
+                // are legitimate survival items and should not be flagged
+                if (!ItemAccessor.isItemNameTranslatable(itemStack)) {
+                    String itemName = ItemAccessor.getItemName(itemStack);
+                    if (itemName != null) {
+                        violations.add(Violation.illegal("COMPONENT_ITEM_NAME",
+                                msg("COMPONENT_ITEM_NAME")));
+                        checkTextContent(violations, itemName, "item_name");
+                    }
                 }
             }
         }

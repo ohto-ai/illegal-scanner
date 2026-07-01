@@ -65,7 +65,7 @@ validation:
   flag_custom_model_data: true
   flag_adventure_tags: true
   flag_lore_presence: true          # Mark any lore as ILLEGAL (no survival source)
-  flag_item_name_presence: true     # Mark any item_name as ILLEGAL (no survival source)
+  flag_item_name_presence: true     # Mark literal item_name as ILLEGAL (vanilla translatable names like Ominous Banner are allowed)
 
   # Attribute thresholds (for values that DO exist in vanilla prototype)
   attribute_limits:
