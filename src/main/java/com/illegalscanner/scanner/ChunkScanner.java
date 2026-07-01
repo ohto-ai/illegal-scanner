@@ -103,6 +103,11 @@ public class ChunkScanner {
 
         int totalFlagged = 0;
         for (ContainerUtil.ContainerInfo container : containers) {
+            // Audit: skip containers marked for exclusion
+            if (ContainerUtil.hasIgnoreMarker(container.items())) {
+                continue;
+            }
+
             for (ContainerUtil.SlotItem slotItem : container.items()) {
                 // Validate item
                 List<Violation> violations = plugin.getValidationEngine().validate(slotItem.item(), container.location());

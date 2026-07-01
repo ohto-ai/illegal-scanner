@@ -78,7 +78,7 @@ public class ScanService {
             plugin.getLogger().warning("Chunk not loaded: " + world.getName() + " " + chunkX + "," + chunkZ);
             return 0;
         }
-        int result = scanChunkInternal(chunk, "chunk", 0);
+        int result = scanChunkInternal(chunk, "chunk", 0).flagged();
         dedupCache.markScanned(world.getName(), chunkX, chunkZ, System.currentTimeMillis());
         return result;
     }
@@ -89,7 +89,7 @@ public class ScanService {
      * the new scan result is the sole source of truth for this chunk.
      * @return number of items flagged
      */
-    private int scanChunkInternal(Chunk chunk, String scanType, int sessionId) {
+    private ScanResult scanChunkInternal(Chunk chunk, String scanType, int sessionId) {
         String worldName = chunk.getWorld().getName();
         int cx = chunk.getX();
         int cz = chunk.getZ();
@@ -98,12 +98,14 @@ public class ScanService {
         plugin.getDatabaseManager().deleteMonitorRecordsByChunk(worldName, cx, cz);
         plugin.getDatabaseManager().deleteScanRecordsByChunk(worldName, cx, cz);
 
+        List<CompletableFuture<Long>> pendingInserts = new ArrayList<>();
         int flagged = chunkScanner.scanChunk(chunk, (item, slot, container, loc, violations, severity) -> {
-            recordViolation(item, slot, container, loc, violations, severity,
+            CompletableFuture<Long> f = recordViolation(item, slot, container, loc, violations, severity,
                     scanType, sessionId, null, null);
+            if (f != null) pendingInserts.add(f);
         });
 
-        return flagged;
+        return new ScanResult(flagged, pendingInserts);
     }
 
     /**
@@ -113,7 +115,7 @@ public class ScanService {
      *
      * @return number of items flagged
      */
-    private int scanContainersFromNbt(List<McaChunkReader.ContainerFromNbt> containers,
+    private ScanResult scanContainersFromNbt(List<McaChunkReader.ContainerFromNbt> containers,
                                        World world, int cx, int cz,
                                        String scanType, int sessionId) {
         String worldName = world.getName();
@@ -124,25 +126,32 @@ public class ScanService {
         plugin.getDatabaseManager().deleteScanRecordsByChunk(worldName, cx, cz);
 
         if (containers.isEmpty()) {
-            return 0;
+            return new ScanResult(0, List.of());
         }
 
         int flagged = 0;
+        List<CompletableFuture<Long>> pendingInserts = new ArrayList<>();
         for (McaChunkReader.ContainerFromNbt container : containers) {
+            // Audit: skip containers marked for exclusion
+            if (ContainerUtil.hasIgnoreMarkerNbt(container.items())) {
+                continue;
+            }
+
             Location loc = new Location(world, container.worldX(), container.worldY(), container.worldZ());
             for (McaChunkReader.SlotItemNbt slotItem : container.items()) {
                 org.bukkit.inventory.ItemStack item = slotItem.item();
                 List<Violation> violations = plugin.getValidationEngine().validate(item, loc);
                 if (!violations.isEmpty()) {
                     ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
-                    recordViolation(item, slotItem.slot(), container.containerType(), loc,
+                    CompletableFuture<Long> f = recordViolation(item, slotItem.slot(), container.containerType(), loc,
                             violations, severity, scanType, sessionId, null, null);
+                    if (f != null) pendingInserts.add(f);
                     flagged++;
                 }
             }
         }
 
-        return flagged;
+        return new ScanResult(flagged, pendingInserts);
     }
 
     // ==================== Force Scan (bypass dedup) ====================
@@ -167,9 +176,15 @@ public class ScanService {
                     + world.getName() + " " + chunkX + "," + chunkZ);
             return -1;
         }
-        int result = scanChunkInternal(chunk, "chunk", 0);
+        ScanResult result = scanChunkInternal(chunk, "chunk", 0);
+        // Wait for all async DB inserts to complete before returning,
+        // so the caller can immediately query the database with correct results.
+        if (!result.pendingInserts().isEmpty()) {
+            CompletableFuture.allOf(
+                    result.pendingInserts().toArray(new CompletableFuture[0])).join();
+        }
         dedupCache.markScanned(world.getName(), chunkX, chunkZ, System.currentTimeMillis());
-        return result;
+        return result.flagged();
     }
 
     /**
@@ -491,14 +506,15 @@ public class ScanService {
 
     /**
      * Record a violation to scan_records and item_index.
+     * @return a CompletableFuture that completes when the DB insert is done
      */
-    private void recordViolation(org.bukkit.inventory.ItemStack item, int slot,
+    private CompletableFuture<Long> recordViolation(org.bukkit.inventory.ItemStack item, int slot,
                                   String container, Location loc,
                                   List<Violation> violations, ValidationResult severity,
                                   String scanType, int sessionId,
                                   String playerUuid, String playerName) {
         String itemHash = plugin.getItemHashService().resolve(item);
-        if (itemHash == null) return;
+        if (itemHash == null) return CompletableFuture.completedFuture(-1L);
 
         String worldName = loc != null && loc.getWorld() != null ? loc.getWorld().getName() : "unknown";
         int chunkX = loc != null ? loc.getBlockX() >> 4 : 0;
@@ -515,7 +531,7 @@ public class ScanService {
                 violationJson, severity.name(),
                 System.currentTimeMillis());
 
-        plugin.getDatabaseManager().insertScanRecord(record);
+        CompletableFuture<Long> future = plugin.getDatabaseManager().insertScanRecord(record);
 
         // Console alert
         if (severity == ValidationResult.ILLEGAL
@@ -525,6 +541,8 @@ public class ScanService {
                     + " @ " + (containerLoc != null ? containerLoc : "?")
                     + " - " + violations.size() + " violations");
         }
+
+        return future;
     }
 
     private String buildViolationJson(List<Violation> violations) {
@@ -611,7 +629,7 @@ public class ScanService {
                 int fcz = mf.cz();
                 try {
                     List<McaChunkReader.ContainerFromNbt> containers = mf.future().get();
-                    int f = scanContainersFromNbt(containers, world, fcx, fcz, scanType, sessionId);
+                    int f = scanContainersFromNbt(containers, world, fcx, fcz, scanType, sessionId).flagged();
                     flagged.addAndGet(f);
                 } catch (Exception e) {
                     plugin.getLogger().warning("MCA read failed for chunk " + fcx + "," + fcz
@@ -640,7 +658,7 @@ public class ScanService {
                             // Already loaded: process synchronously
                             try {
                                 Chunk chunk = world.getChunkAt(cx, cz);
-                                int f = scanChunkInternal(chunk, scanType, sessionId);
+                                int f = scanChunkInternal(chunk, scanType, sessionId).flagged();
                                 flagged.addAndGet(f);
                             } catch (Exception e) {
                                 plugin.getLogger().fine("Chunk scan failed (" + cx + "," + cz + "): " + e.getMessage());
@@ -680,7 +698,7 @@ public class ScanService {
                                 pendingChunks.add(new long[]{cx, cz});
                                 continue;
                             }
-                            int f = scanChunkInternal(chunk, scanType, sessionId);
+                            int f = scanChunkInternal(chunk, scanType, sessionId).flagged();
                             flagged.addAndGet(f);
                             dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
                             scanned.incrementAndGet();
@@ -706,7 +724,7 @@ public class ScanService {
                             chunk.load(true);
                         }
                         if (chunk.isLoaded()) {
-                            int f = scanChunkInternal(chunk, scanType, sessionId);
+                            int f = scanChunkInternal(chunk, scanType, sessionId).flagged();
                             flagged.addAndGet(f);
                             dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
                             pendingChunks.remove(retryIdx);
@@ -837,7 +855,7 @@ public class ScanService {
                             if (world.isChunkLoaded(cx, cz)) {
                                 // Already loaded — safe to use Bukkit API
                                 Chunk chunk = world.getChunkAt(cx, cz);
-                                int f = scanChunkInternal(chunk, "full", sessionId);
+                                int f = scanChunkInternal(chunk, "full", sessionId).flagged();
                                 flagged.addAndGet(f);
                                 dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                             } else if (mcaDirect) {
@@ -846,7 +864,7 @@ public class ScanService {
                                         McaChunkReader.readChunkItems(world.getWorldFolder(), cx, cz,
                                                 registryAccess, sf, sa, sm, scb, see);
                                 int f = scanContainersFromNbt(containers, world, cx, cz,
-                                        "full", sessionId);
+                                        "full", sessionId).flagged();
                                 flagged.addAndGet(f);
                                 dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                             } else {
@@ -857,7 +875,7 @@ public class ScanService {
                                     fullPendingChunks.add(new long[]{worldIdx, cx, cz});
                                     continue; // don't count as processed
                                 }
-                                int f = scanChunkInternal(chunk, "full", sessionId);
+                                int f = scanChunkInternal(chunk, "full", sessionId).flagged();
                                 flagged.addAndGet(f);
                                 dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                             }
@@ -885,7 +903,7 @@ public class ScanService {
                                 chunk.load(true); // fallback sync load
                             }
                             if (chunk.isLoaded()) {
-                                int f = scanChunkInternal(chunk, "full", sessionId);
+                                int f = scanChunkInternal(chunk, "full", sessionId).flagged();
                                 flagged.addAndGet(f);
                                 dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                                 fullPendingChunks.remove(retryIdx);
@@ -938,6 +956,11 @@ public class ScanService {
     }
 
     // ==================== Scan Control (Pause / Resume / Stop / Restart) ====================
+
+    /**
+     * Result of a scan operation: flagged count + pending async DB inserts.
+     */
+    private record ScanResult(int flagged, List<CompletableFuture<Long>> pendingInserts) {}
 
     /**
      * Tracks an in-flight async MCA read with its chunk coordinates.
@@ -1111,7 +1134,7 @@ public class ScanService {
                 try {
                     List<McaChunkReader.ContainerFromNbt> containers = mf.future().get();
                     int f = scanContainersFromNbt(containers, paused.world, fcx, fcz,
-                            paused.scanType, sessionId);
+                            paused.scanType, sessionId).flagged();
                     paused.flagged.addAndGet(f);
                 } catch (Exception e) {
                     plugin.getLogger().warning("MCA read failed for chunk " + fcx + "," + fcz
@@ -1139,7 +1162,7 @@ public class ScanService {
                         if (paused.world.isChunkLoaded(cx, cz)) {
                             try {
                                 Chunk chunk = paused.world.getChunkAt(cx, cz);
-                                int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                                int f = scanChunkInternal(chunk, paused.scanType, sessionId).flagged();
                                 paused.flagged.addAndGet(f);
                             } catch (Exception e) {
                                 plugin.getLogger().fine("Chunk scan failed (" + cx + "," + cz + "): " + e.getMessage());
@@ -1178,7 +1201,7 @@ public class ScanService {
                                 paused.pendingChunks.add(new long[]{cx, cz});
                                 continue;
                             }
-                            int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                            int f = scanChunkInternal(chunk, paused.scanType, sessionId).flagged();
                             paused.flagged.addAndGet(f);
                             dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
                             paused.scanned.incrementAndGet();
@@ -1204,7 +1227,7 @@ public class ScanService {
                             chunk.load(true);
                         }
                         if (chunk.isLoaded()) {
-                            int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                            int f = scanChunkInternal(chunk, paused.scanType, sessionId).flagged();
                             paused.flagged.addAndGet(f);
                             dedupCache.markScanned(worldName, cx, cz, System.currentTimeMillis());
                             paused.pendingChunks.remove(retryIdx);
@@ -1298,7 +1321,7 @@ public class ScanService {
                         if (world.isChunkLoaded(cx, cz)) {
                             // Already loaded — safe to use Bukkit API
                             Chunk chunk = world.getChunkAt(cx, cz);
-                            int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                            int f = scanChunkInternal(chunk, paused.scanType, sessionId).flagged();
                             paused.flagged.addAndGet(f);
                             dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                         } else if (mcaDirect) {
@@ -1307,7 +1330,7 @@ public class ScanService {
                                     McaChunkReader.readChunkItems(world.getWorldFolder(), cx, cz,
                                             registryAccess, sf, sa, sm, scb, see);
                             int f = scanContainersFromNbt(containers, world, cx, cz,
-                                    paused.scanType, sessionId);
+                                    paused.scanType, sessionId).flagged();
                             paused.flagged.addAndGet(f);
                             dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                         } else {
@@ -1318,7 +1341,7 @@ public class ScanService {
                                 paused.pendingChunks.add(new long[]{worldIdx, cx, cz});
                                 continue; // don't count as processed
                             }
-                            int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                            int f = scanChunkInternal(chunk, paused.scanType, sessionId).flagged();
                             paused.flagged.addAndGet(f);
                             dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                         }
@@ -1346,7 +1369,7 @@ public class ScanService {
                             chunk.load(true); // fallback sync load
                         }
                         if (chunk.isLoaded()) {
-                            int f = scanChunkInternal(chunk, paused.scanType, sessionId);
+                            int f = scanChunkInternal(chunk, paused.scanType, sessionId).flagged();
                             paused.flagged.addAndGet(f);
                             dedupCache.markScanned(wName, cx, cz, System.currentTimeMillis());
                             paused.pendingChunks.remove(retryIdx);

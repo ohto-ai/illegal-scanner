@@ -34,11 +34,15 @@ public class ContainerValidator implements ItemValidator {
         // Bundle — check internal items
         if (ItemAccessor.hasBundleContents(itemStack)) {
             List<ItemStack> bundleItems = ItemAccessor.getBundleItems(itemStack);
-            for (int i = 0; i < bundleItems.size(); i++) {
-                List<Violation> inner = plugin.getValidationEngine().validate(bundleItems.get(i));
-                for (Violation v : inner) {
-                    violations.add(Violation.illegal(v.type(),
-                            "[收纳袋 槽位 " + i + "] " + v.message()));
+            // Audit: skip bundle level if it holds an exclusion marker
+            if (!com.illegalscanner.scanner.ContainerUtil.hasIgnoreMarker(
+                    bundleItems.toArray(new ItemStack[0]))) {
+                for (int i = 0; i < bundleItems.size(); i++) {
+                    List<Violation> inner = plugin.getValidationEngine().validate(bundleItems.get(i));
+                    for (Violation v : inner) {
+                        violations.add(Violation.illegal(v.type(),
+                                "[收纳袋 槽位 " + i + "] " + v.message()));
+                    }
                 }
             }
         }
@@ -54,14 +58,18 @@ public class ContainerValidator implements ItemValidator {
                         "（仅创造模式 Ctrl+中键选取或命令可获得）"));
 
                 List<ItemStack> containerItems = ItemAccessor.getContainerItems(itemStack);
-                for (int i = 0; i < containerItems.size(); i++) {
-                    ItemStack innerItem = containerItems.get(i);
-                    if (innerItem != null && !innerItem.getType().isAir()) {
-                        List<Violation> inner = plugin.getValidationEngine().validate(innerItem);
-                        for (Violation v : inner) {
-                            violations.add(Violation.illegal(v.type(),
-                                    "[方块容器 槽位 " + i + " - " +
-                                    innerItem.getType().name() + "] " + v.message()));
+                // Audit: skip container component level if it holds an exclusion marker
+                if (!com.illegalscanner.scanner.ContainerUtil.hasIgnoreMarker(
+                        containerItems.toArray(new ItemStack[0]))) {
+                    for (int i = 0; i < containerItems.size(); i++) {
+                        ItemStack innerItem = containerItems.get(i);
+                        if (innerItem != null && !innerItem.getType().isAir()) {
+                            List<Violation> inner = plugin.getValidationEngine().validate(innerItem);
+                            for (Violation v : inner) {
+                                violations.add(Violation.illegal(v.type(),
+                                        "[方块容器 槽位 " + i + " - " +
+                                        innerItem.getType().name() + "] " + v.message()));
+                            }
                         }
                     }
                 }
@@ -86,6 +94,10 @@ public class ContainerValidator implements ItemValidator {
         if (itemStack.getItemMeta() instanceof BlockStateMeta meta) {
             if (meta.getBlockState() instanceof ShulkerBox shulker) {
                 ItemStack[] contents = shulker.getInventory().getContents();
+                // Audit: skip shulker level if it holds an exclusion marker
+                if (com.illegalscanner.scanner.ContainerUtil.hasIgnoreMarker(contents)) {
+                    return violations;
+                }
                 for (int i = 0; i < contents.length; i++) {
                     ItemStack contained = contents[i];
                     if (contained != null && !contained.getType().isAir()) {

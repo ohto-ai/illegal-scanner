@@ -22,6 +22,9 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.ItemStack;
 
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * Protects View GUIs: blocks decorative items, Shift+F gives clean copy,
  * handles back/page navigation, TP, and drill-down.
@@ -29,6 +32,7 @@ import org.bukkit.inventory.ItemStack;
 public class ViewGuiListener implements Listener {
 
     private final IllegalScanner plugin;
+    private final Set<String> inProgressRescans = new HashSet<>();
 
     public ViewGuiListener(IllegalScanner plugin) { this.plugin = plugin; }
 
@@ -179,9 +183,17 @@ public class ViewGuiListener implements Listener {
             return;
         }
 
+        // Guard against rapid double-clicks on the same chunk
+        String scanKey = worldName + "/" + cx + "/" + cz;
+        if (!inProgressRescans.add(scanKey)) {
+            player.sendMessage("§e该区块正在扫描中，请稍后再试");
+            return;
+        }
+
         World world = org.bukkit.Bukkit.getWorld(worldName);
         if (world == null) {
             player.sendMessage("§c世界 " + worldName + " 未找到");
+            inProgressRescans.remove(scanKey);
             return;
         }
 
@@ -197,12 +209,15 @@ public class ViewGuiListener implements Listener {
                 player.sendMessage("§a区块扫描完成: 发现 " + flagged + " 个违规物品。");
             } else {
                 player.sendMessage("§c区块 (" + cx + "," + cz + ") 无法加载，扫描失败");
+                inProgressRescans.remove(scanKey);
                 return; // Do not reopen on failure
             }
 
             // Reopen chunk view preserving current page and navigation history
-            plugin.getServer().getScheduler().runTask(plugin, () ->
-                vh.openChunkView(player, worldName, cx, cz, holder.page, holder.back));
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                vh.openChunkView(player, worldName, cx, cz, holder.page, holder.back);
+                inProgressRescans.remove(scanKey);
+            });
         });
     }
 

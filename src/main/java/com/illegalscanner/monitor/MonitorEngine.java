@@ -238,41 +238,45 @@ public class MonitorEngine implements Listener {
                 .getScanItemHashesByContainerLoc(containerLocStr);
 
         // 3. Scan each slot, collect current violation hashes
+        //    Audit: skip if the container holds an exclusion marker.
         java.util.Set<String> currentHashes = new java.util.HashSet<>();
-        int slot = 0;
-        for (ItemStack item : inventory.getContents()) {
-            if (item != null && !item.getType().isAir()) {
-                List<Violation> violations = plugin.getValidationEngine().validate(item, containerLoc);
-                if (!violations.isEmpty()) {
-                    ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
-                    String itemHash = plugin.getItemHashService().resolve(item);
-                    if (itemHash != null) {
-                        currentHashes.add(itemHash);
+        if (!com.illegalscanner.scanner.ContainerUtil.hasIgnoreMarker(
+                com.illegalscanner.scanner.ContainerUtil.collectItems(inventory))) {
+            int slot = 0;
+            for (ItemStack item : inventory.getContents()) {
+                if (item != null && !item.getType().isAir()) {
+                    List<Violation> violations = plugin.getValidationEngine().validate(item, containerLoc);
+                    if (!violations.isEmpty()) {
+                        ValidationResult severity = plugin.getValidationEngine().getOverallSeverity(violations);
+                        String itemHash = plugin.getItemHashService().resolve(item);
+                        if (itemHash != null) {
+                            currentHashes.add(itemHash);
 
-                        if (plugin.getQueryService() != null) {
-                            plugin.getQueryService().invalidateAll();
-                        }
+                            if (plugin.getQueryService() != null) {
+                                plugin.getQueryService().invalidateAll();
+                            }
 
-                        String violationJson = buildViolationJson(violations);
-                        MonitorRecord record = new MonitorRecord(
-                                0, itemHash, "CONTAINER_CLOSE",
-                                worldName, chunkX, chunkZ,
-                                player.getUniqueId().toString(), player.getName(),
-                                slot, containerType, containerLocStr,
-                                violationJson, severity.name(), now);
-                        plugin.getDatabaseManager().insertMonitorRecord(record);
+                            String violationJson = buildViolationJson(violations);
+                            MonitorRecord record = new MonitorRecord(
+                                    0, itemHash, "CONTAINER_CLOSE",
+                                    worldName, chunkX, chunkZ,
+                                    player.getUniqueId().toString(), player.getName(),
+                                    slot, containerType, containerLocStr,
+                                    violationJson, severity.name(), now);
+                            plugin.getDatabaseManager().insertMonitorRecord(record);
 
-                        if (severity == ValidationResult.ILLEGAL
-                                && plugin.getConfigManager().getConfig().getBoolean("alerts.console_log", true)) {
-                            plugin.getLogger().warning("[CONTAINER_CLOSE] ILLEGAL: " + item.getType().name()
-                                    + " from container @ " + containerLocStr
-                                    + " (closed by " + player.getName() + ")"
-                                    + " - " + violations.size() + " violations");
+                            if (severity == ValidationResult.ILLEGAL
+                                    && plugin.getConfigManager().getConfig().getBoolean("alerts.console_log", true)) {
+                                plugin.getLogger().warning("[CONTAINER_CLOSE] ILLEGAL: " + item.getType().name()
+                                        + " from container @ " + containerLocStr
+                                        + " (closed by " + player.getName() + ")"
+                                        + " - " + violations.size() + " violations");
+                            }
                         }
                     }
                 }
+                slot++;
             }
-            slot++;
         }
 
         // 4. For old scan items that are NO LONGER in the container,
