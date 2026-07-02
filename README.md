@@ -1,4 +1,4 @@
-# illegal-scanner
+# Illegal Scanner
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/ohto-ai/illegal-scanner)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.20.6+-brightgreen)](https://papermc.io)
